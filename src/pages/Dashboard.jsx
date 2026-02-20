@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import Chart from 'react-apexcharts';
 import { MapContainer, TileLayer, CircleMarker, Popup, Tooltip } from 'react-leaflet';
 
-export default function CommandCenter() {
+export default function Dashboard() {
   const terminalRef = useRef(null);
 
   // Terminal State with Color Coding
