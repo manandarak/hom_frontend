@@ -19,8 +19,14 @@ export default function MainLayout() {
       {/* SIDEBAR */}
       <div className="sidebar d-flex flex-column">
         <div className="px-4 mb-4">
-          <h4 className="text-white fw-bold m-0"><i className="fa-solid fa-layer-group text-primary me-2"></i>HOM Pulse</h4>
-          <small className="text-muted">Production Env v2.0</small>
+  <h3 className="fw-bold text-dark d-flex align-items-center justify-content-center">
+    <img
+      src="/src/assets/logo.png"
+      alt="HOM Pulse Logo"
+      style={{ width: '200px', height: '100px', marginRight: '8px' }}
+    />
+
+  </h3>         <small className="text-white">Production Env v2.0</small>
         </div>
 
         <ul className="nav flex-column mb-auto">
