@@ -8,6 +8,11 @@ import Dashboard from './pages/Dashboard';
 import GeographyMaster from './pages/GeographyMaster';
 import ProductMaster from './pages/ProductMaster';
 import PartnerMaster from './pages/PartnerMaster';
+import InventoryMaster from './pages/InventoryMaster';
+import UserMatrix from './pages/UserMatrix.jsx';
+import FinanceMaster from './pages/FinanceMaster.jsx';
+import OrderHub from "./pages/OrderHub.jsx";
+
 // Protected Route Wrapper
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useContext(AuthContext);
@@ -32,18 +37,19 @@ function App() {
           {/* Default path (/) loads Dashboard */}
           <Route index element={<Dashboard />} />
 
-          {/* This path handles http://localhost:5173/geography */}
+          {/* Core Modules */}
           <Route path="geography" element={<GeographyMaster />} />
-
-          {/* This path handles http://localhost:5173/products */}
+          <Route path="inventory" element={<InventoryMaster />} />
           <Route path="products" element={<ProductMaster />} />
+          <Route path="partners" element={<PartnerMaster />} />
 
-            {/* This path handles http://localhost:5173/products */}
-          <Route path="users" element={<PartnerMaster />} />
+          {/* Identity & Access Management */}
+          <Route path="users" element={<UserMatrix />} />
+          <Route path="finance" element={<FinanceMaster />} />
+          <Route path="order-hub" element={<OrderHub />} />
 
           {/* Placeholders for remaining modules */}
           <Route path="orders" element={<div className="p-4"><h1>Order Hub</h1><p>API connection pending...</p></div>} />
-          <Route path="users" element={<div className="p-4"><h1>User Matrix</h1><p>API connection pending...</p></div>} />
         </Route>
       </Routes>
     </BrowserRouter>

@@ -19,14 +19,14 @@ export default function MainLayout() {
       {/* SIDEBAR */}
       <div className="sidebar d-flex flex-column">
         <div className="px-4 mb-4">
-  <h3 className="fw-bold text-dark d-flex align-items-center justify-content-center">
-    <img
-      src="/src/assets/logo.png"
-      alt="HOM Pulse Logo"
-      style={{ width: '200px', height: '100px', marginRight: '8px' }}
-    />
-
-  </h3>         <small className="text-white">Production Env v2.0</small>
+          <h3 className="fw-bold text-dark d-flex align-items-center justify-content-center">
+            <img
+              src="/src/assets/logo.png"
+              alt="HOM Pulse Logo"
+              style={{ width: '200px', height: '100px', marginRight: '8px' }}
+            />
+          </h3>
+          <small className="text-white">Production Env v2.0</small>
         </div>
 
         <ul className="nav flex-column mb-auto">
@@ -49,6 +49,27 @@ export default function MainLayout() {
                   <i className="fa-solid fa-box-open"></i> Product Vault
                 </NavLink>
               </li>
+
+              {/* --- NEW: Partner Matrix --- */}
+              <li className="nav-item">
+                <NavLink to="/partners" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
+                  <i className="fa-solid fa-network-wired"></i> Partner Matrix
+                </NavLink>
+              </li>
+
+              {/* --- NEW: Inventory Control --- */}
+              <li className="nav-item">
+                <NavLink to="/inventory" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
+                  <i className="fa-solid fa-boxes-stacked"></i> Inventory Control
+                </NavLink>
+              </li>
+
+              <li className="nav-item">
+  <NavLink to="/finance" className={({ isActive }) => `nav-link text-white-50 px-4 py-3 ${isActive ? 'active bg-primary bg-opacity-25 text-white fw-bold border-start border-4 border-primary' : ''}`}>
+    <i className="fa-solid fa-indian-rupee-sign me-3"></i> Finance & Ledger
+  </NavLink>
+</li>
+
               <li className="nav-item">
                 <NavLink to="/users" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
                   <i className="fa-solid fa-users-gear"></i> User Matrix
@@ -59,7 +80,7 @@ export default function MainLayout() {
 
           {/* General Menus for all users */}
           <li className="nav-item">
-            <NavLink to="/orders" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
+            <NavLink to="/order-hub" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
               <i className="fa-solid fa-truck-fast"></i> Order Hub
             </NavLink>
           </li>

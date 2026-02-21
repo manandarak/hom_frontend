@@ -19,6 +19,8 @@
     "react-apexcharts": "^2.0.1",
     "react-d3-tree": "^3.6.6",
     "react-dom": "^19.2.0",
+    "react-hot-toast": "^2.6.0",
+    "react-icons": "^5.5.0",
     "react-leaflet": "^5.0.0",
     "react-router-dom": "^7.13.0"
   },
