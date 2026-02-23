@@ -7,7 +7,12 @@ const initialUserForm = {
   email: '',
   password: '',
   role_id: '',
-  is_active: true
+  is_active: true,
+  assigned_zone_id: '',
+  assigned_state_id: '',
+  assigned_region_id: '',
+  assigned_area_id: '',
+  assigned_territory_id: ''
 };
 
 export default function UserMatrix() {
@@ -18,6 +23,11 @@ export default function UserMatrix() {
   const [users, setUsers] = useState([]);
   const [roles, setRoles] = useState([]);
   const [permissions, setPermissions] = useState([]);
+
+  // Geo Hierarchy State
+  const [geoMaster, setGeoMaster] = useState({
+    zones: [], states: [], regions: [], areas: [], territories: []
+  });
 
   // Modal States
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
@@ -38,14 +48,21 @@ export default function UserMatrix() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [usersRes, rolesRes, permsRes] = await Promise.all([
+      const [usersRes, rolesRes, permsRes, zonesRes] = await Promise.all([
         api.get('/users/'),
         api.get('/users/roles'),
-        api.get('/users/permissions')
+        api.get('/users/permissions'),
+        api.get('/geo/zones').catch(() => ({ data: [] })) // Fetch base zones
       ]);
       setUsers(Array.isArray(usersRes.data) ? usersRes.data : usersRes.data.items || []);
       setRoles(Array.isArray(rolesRes.data) ? rolesRes.data : rolesRes.data.items || []);
       setPermissions(Array.isArray(permsRes.data) ? permsRes.data : permsRes.data.items || []);
+
+      setGeoMaster(prev => ({
+        ...prev,
+        zones: Array.isArray(zonesRes.data) ? zonesRes.data : zonesRes.data?.items || []
+      }));
+
     } catch (err) {
       toast.error('Failed to load Identity & Access data.');
       console.error(err);
@@ -58,6 +75,44 @@ export default function UserMatrix() {
     fetchData();
   }, []);
 
+  // --- CASCADING GEO HANDLER FOR USER FORM ---
+  const handleGeoChange = async (field, value) => {
+    setUserForm(prev => ({ ...prev, [field]: value }));
+
+    if (field === 'assigned_zone_id') {
+      setUserForm(prev => ({ ...prev, assigned_state_id: '', assigned_region_id: '', assigned_area_id: '', assigned_territory_id: '' }));
+      setGeoMaster(prev => ({ ...prev, states: [], regions: [], areas: [], territories: [] }));
+      if (value) {
+        const res = await api.get(`/geo/zones/${value}/states`).catch(() => ({ data: [] }));
+        setGeoMaster(prev => ({ ...prev, states: Array.isArray(res.data) ? res.data : res.data.items || [] }));
+      }
+    }
+    else if (field === 'assigned_state_id') {
+      setUserForm(prev => ({ ...prev, assigned_region_id: '', assigned_area_id: '', assigned_territory_id: '' }));
+      setGeoMaster(prev => ({ ...prev, regions: [], areas: [], territories: [] }));
+      if (value) {
+        const res = await api.get(`/geo/states/${value}/regions`).catch(() => ({ data: [] }));
+        setGeoMaster(prev => ({ ...prev, regions: Array.isArray(res.data) ? res.data : res.data.items || [] }));
+      }
+    }
+    else if (field === 'assigned_region_id') {
+      setUserForm(prev => ({ ...prev, assigned_area_id: '', assigned_territory_id: '' }));
+      setGeoMaster(prev => ({ ...prev, areas: [], territories: [] }));
+      if (value) {
+        const res = await api.get(`/geo/regions/${value}/areas`).catch(() => ({ data: [] }));
+        setGeoMaster(prev => ({ ...prev, areas: Array.isArray(res.data) ? res.data : res.data.items || [] }));
+      }
+    }
+    else if (field === 'assigned_area_id') {
+      setUserForm(prev => ({ ...prev, assigned_territory_id: '' }));
+      setGeoMaster(prev => ({ ...prev, territories: [] }));
+      if (value) {
+        const res = await api.get(`/geo/areas/${value}/territories`).catch(() => ({ data: [] }));
+        setGeoMaster(prev => ({ ...prev, territories: Array.isArray(res.data) ? res.data : res.data.items || [] }));
+      }
+    }
+  };
+
   // --- USER MUTATIONS ---
   const openUserModal = (user = null) => {
     if (user) {
@@ -67,11 +122,19 @@ export default function UserMatrix() {
         email: user.email || '',
         password: '',
         role_id: user.role_id || '',
-        is_active: user.is_active !== undefined ? user.is_active : true
+        is_active: user.is_active !== undefined ? user.is_active : true,
+        assigned_zone_id: user.assigned_zone_id || '',
+        assigned_state_id: user.assigned_state_id || '',
+        assigned_region_id: user.assigned_region_id || '',
+        assigned_area_id: user.assigned_area_id || '',
+        assigned_territory_id: user.assigned_territory_id || ''
       });
+      // Clear downstream geo lists. User must re-select from top to modify existing hierarchy
+      setGeoMaster(prev => ({ ...prev, states: [], regions: [], areas: [], territories: [] }));
     } else {
       setEditingUserId(null);
       setUserForm(initialUserForm);
+      setGeoMaster(prev => ({ ...prev, states: [], regions: [], areas: [], territories: [] }));
     }
     setIsUserModalOpen(true);
   };
@@ -83,6 +146,13 @@ export default function UserMatrix() {
     try {
       const payload = { ...userForm };
       payload.role_id = parseInt(payload.role_id);
+
+      // Parse integers or null for geo scoping
+      payload.assigned_zone_id = payload.assigned_zone_id ? parseInt(payload.assigned_zone_id) : null;
+      payload.assigned_state_id = payload.assigned_state_id ? parseInt(payload.assigned_state_id) : null;
+      payload.assigned_region_id = payload.assigned_region_id ? parseInt(payload.assigned_region_id) : null;
+      payload.assigned_area_id = payload.assigned_area_id ? parseInt(payload.assigned_area_id) : null;
+      payload.assigned_territory_id = payload.assigned_territory_id ? parseInt(payload.assigned_territory_id) : null;
 
       if (editingUserId) {
         if (!payload.password) delete payload.password;
@@ -185,7 +255,7 @@ export default function UserMatrix() {
         </div>
       </div>
 
-      {/* METRIC CARDS - ADDED FOR PREMIUM FEEL */}
+      {/* METRIC CARDS */}
       <div className="row g-4 mb-4">
         <div className="col-md-4">
           <div className="card border-0 shadow-sm rounded-4 h-100 overflow-hidden bg-white">
@@ -267,21 +337,24 @@ export default function UserMatrix() {
                   <th className="px-4 py-3 text-uppercase text-muted fw-bold border-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>Account Status</th>
                   <th className="py-3 text-uppercase text-muted fw-bold border-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>Identity Profile</th>
                   <th className="py-3 text-uppercase text-muted fw-bold border-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>Access Level</th>
+                  <th className="py-3 text-uppercase text-muted fw-bold border-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>Geo Scoping</th>
                   <th className="text-end px-4 py-3 text-uppercase text-muted fw-bold border-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan="4" className="text-center py-5"><div className="spinner-border text-primary"></div></td></tr>
+                  <tr><td colSpan="5" className="text-center py-5"><div className="spinner-border text-primary"></div></td></tr>
                 ) : filteredUsers.length === 0 ? (
                   <tr>
-                    <td colSpan="4" className="text-center py-5 text-muted">
+                    <td colSpan="5" className="text-center py-5 text-muted">
                       <i className="fa-solid fa-user-slash fs-1 opacity-25 mb-3 d-block"></i>
                       <h5 className="fw-bold">No Users Found</h5>
                     </td>
                   </tr>
                 ) : filteredUsers.map(u => {
                   const userRole = roles.find(r => r.id === u.role_id);
+                  const isScoped = u.assigned_zone_id || u.assigned_region_id || u.assigned_area_id || u.assigned_territory_id;
+
                   return (
                     <tr key={u.id} className={!u.is_active ? 'bg-light opacity-75' : ''} style={{ transition: 'all 0.2s ease' }}>
                       <td className="px-4">
@@ -295,7 +368,7 @@ export default function UserMatrix() {
                           <img src={`https://ui-avatars.com/api/?name=${u.username}&background=eff6ff&color=1d4ed8&bold=true`} className="rounded-circle me-3 border border-2 border-white shadow-sm" width="45" alt="Avatar"/>
                           <div>
                             <div className="fw-bolder text-dark fs-6">{u.username}</div>
-                            <small className="text-muted fw-medium"><i className="fa-regular fa-envelope me-1"></i> {u.email}</small>
+                            <small className="text-muted fw-medium"><i className="fa-regular fa-envelope me-1"></i> {u.email || 'N/A'}</small>
                           </div>
                         </div>
                       </td>
@@ -304,6 +377,15 @@ export default function UserMatrix() {
                           <i className="fa-solid fa-shield-cat me-2 text-primary"></i>
                           {userRole ? userRole.name.toUpperCase() : `ID: ${u.role_id}`}
                         </span>
+                      </td>
+                      <td>
+                        {isScoped ? (
+                          <span className="badge bg-info bg-opacity-10 text-info border border-info border-opacity-25 px-2 py-1">
+                            <i className="fa-solid fa-location-crosshairs me-1"></i> Scoped Access
+                          </span>
+                        ) : (
+                          <span className="text-muted small fst-italic"><i className="fa-solid fa-globe me-1"></i> Global Access</span>
+                        )}
                       </td>
                       <td className="text-end px-4">
                         <button className="btn btn-light btn-sm rounded-circle me-2 text-primary shadow-sm" onClick={() => openUserModal(u)} title="Edit Account">
@@ -381,7 +463,7 @@ export default function UserMatrix() {
       {/* --- MODAL: CREATE / EDIT USER --- */}
       {isUserModalOpen && (
         <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(15, 23, 42, 0.7)', backdropFilter: 'blur(5px)' }}>
-          <div className="modal-dialog modal-dialog-centered">
+          <div className="modal-dialog modal-dialog-centered modal-lg">
             <div className="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
               <form onSubmit={handleUserSubmit}>
                 <div className={`modal-header bg-gradient text-white border-0 p-4 ${editingUserId ? 'bg-info' : 'bg-primary'}`}>
@@ -395,8 +477,11 @@ export default function UserMatrix() {
                   </div>
                   <button type="button" className="btn-close btn-close-white opacity-75" onClick={() => setIsUserModalOpen(false)}></button>
                 </div>
+
                 <div className="modal-body p-4 bg-light">
                   <div className="row g-3">
+
+                    {/* CORE USER DETAILS */}
                     <div className="col-12">
                       <label className="form-label small fw-bold text-uppercase text-muted mb-1">Username <span className="text-danger">*</span></label>
                       <div className="input-group bg-white rounded-3 shadow-sm border overflow-hidden">
@@ -405,10 +490,10 @@ export default function UserMatrix() {
                       </div>
                     </div>
                     <div className="col-12">
-                      <label className="form-label small fw-bold text-uppercase text-muted mb-1">Email Address <span className="text-danger">*</span></label>
+                      <label className="form-label small fw-bold text-uppercase text-muted mb-1">Email Address</label>
                       <div className="input-group bg-white rounded-3 shadow-sm border overflow-hidden">
                         <span className="input-group-text bg-white border-0 text-muted"><i className="fa-solid fa-envelope"></i></span>
-                        <input type="email" className="form-control border-0 shadow-none py-2" required value={userForm.email} onChange={e => setUserForm({...userForm, email: e.target.value})} />
+                        <input type="email" className="form-control border-0 shadow-none py-2" value={userForm.email} onChange={e => setUserForm({...userForm, email: e.target.value})} />
                       </div>
                     </div>
                     <div className="col-md-6">
@@ -430,6 +515,54 @@ export default function UserMatrix() {
                         </select>
                       </div>
                     </div>
+
+                    {/* NEW: GEOGRAPHICAL HIERARCHY SCOPING */}
+                    <div className="col-12 mt-4 p-3 bg-white rounded-4 border shadow-sm">
+                       <label className="form-label fw-bold text-uppercase text-primary mb-2">
+                         <i className="fa-solid fa-map-location-dot me-2"></i> Geographical Hierarchy Scoping <span className="text-muted small text-transform-none fw-normal">(Optional)</span>
+                       </label>
+                       {editingUserId && <div className="small text-warning fw-semibold mb-3"><i className="fa-solid fa-triangle-exclamation me-1"></i> Note: To update an existing user's scope, you must re-select starting from Zone.</div>}
+
+                       <div className="row g-2">
+                          <div className="col-md-4">
+                            <label className="form-label small text-muted fw-bold mb-1">Restrict Zone</label>
+                            <select className="form-select form-select-sm border bg-light shadow-none fw-semibold" value={userForm.assigned_zone_id} onChange={e => handleGeoChange('assigned_zone_id', e.target.value)}>
+                              <option value="">No Restriction (Global)</option>
+                              {geoMaster.zones.map(z => <option key={z.id} value={z.id}>{z.name}</option>)}
+                            </select>
+                          </div>
+                          <div className="col-md-4">
+                            <label className="form-label small text-muted fw-bold mb-1">Restrict State</label>
+                            <select className="form-select form-select-sm border bg-light shadow-none fw-semibold" value={userForm.assigned_state_id} onChange={e => handleGeoChange('assigned_state_id', e.target.value)} disabled={!userForm.assigned_zone_id}>
+                              <option value="">No State Restriction</option>
+                              {geoMaster.states.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                            </select>
+                          </div>
+                          <div className="col-md-4">
+                            <label className="form-label small text-muted fw-bold mb-1">Restrict Region</label>
+                            <select className="form-select form-select-sm border bg-light shadow-none fw-semibold" value={userForm.assigned_region_id} onChange={e => handleGeoChange('assigned_region_id', e.target.value)} disabled={!userForm.assigned_state_id}>
+                              <option value="">No Region Restriction</option>
+                              {geoMaster.regions.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                            </select>
+                          </div>
+                          <div className="col-md-6">
+                            <label className="form-label small text-muted fw-bold mb-1">Restrict Area</label>
+                            <select className="form-select form-select-sm border bg-light shadow-none fw-semibold" value={userForm.assigned_area_id} onChange={e => handleGeoChange('assigned_area_id', e.target.value)} disabled={!userForm.assigned_region_id}>
+                              <option value="">No Area Restriction</option>
+                              {geoMaster.areas.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                            </select>
+                          </div>
+                          <div className="col-md-6">
+                            <label className="form-label small text-muted fw-bold mb-1">Restrict Territory</label>
+                            <select className="form-select form-select-sm border border-primary bg-light shadow-none fw-semibold text-primary" value={userForm.assigned_territory_id} onChange={e => handleGeoChange('assigned_territory_id', e.target.value)} disabled={!userForm.assigned_area_id}>
+                              <option value="">No Territory Restriction</option>
+                              {geoMaster.territories.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                            </select>
+                          </div>
+                       </div>
+                    </div>
+
+                    {/* STATUS SWITCH */}
                     {editingUserId && (
                        <div className="col-12 mt-4 p-3 bg-white rounded-3 border shadow-sm">
                          <div className="form-check form-switch d-flex align-items-center m-0">
@@ -443,6 +576,7 @@ export default function UserMatrix() {
                     )}
                   </div>
                 </div>
+
                 <div className="modal-footer border-0 p-4 bg-white">
                   <button type="button" className="btn btn-light fw-semibold px-4 rounded-pill" onClick={() => setIsUserModalOpen(false)}>Cancel</button>
                   <button type="submit" className={`btn fw-bold px-5 rounded-pill shadow-sm ${editingUserId ? 'btn-info text-white' : 'btn-primary'}`}>

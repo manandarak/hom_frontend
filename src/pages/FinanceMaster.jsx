@@ -12,10 +12,13 @@ export default function FinanceMaster() {
     retailers: []
   });
 
+  // --- GLOBAL SUMMARY STATE ---
+  const [globalSummary, setGlobalSummary] = useState(null);
+
   // --- LEDGER STATE ---
   const [ledgerParams, setLedgerParams] = useState({ party_type: 'ss', party_id: '' });
   const [ledgerData, setLedgerData] = useState([]);
-  const [ledgerBalance, setLedgerBalance] = useState(0); // Optional: if backend returns a running balance
+  const [ledgerBalance, setLedgerBalance] = useState(0);
 
   // --- MODAL & PAYMENT STATE ---
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
@@ -28,27 +31,41 @@ export default function FinanceMaster() {
     remarks: ''
   });
 
-  // --- 1. HYDRATE PARTNER DATA ON MOUNT ---
+  // --- 1. HYDRATE DATA ON MOUNT ---
   useEffect(() => {
-    const fetchPartners = async () => {
-      try {
-        const [ssRes, distRes, retRes] = await Promise.all([
-          api.get('/partners/super-stockists').catch(() => ({ data: [] })),
-          api.get('/partners/distributors').catch(() => ({ data: [] })),
-          api.get('/partners/retailers').catch(() => ({ data: [] }))
-        ]);
-
-        setMasterData({
-          ss: Array.isArray(ssRes.data) ? ssRes.data : ssRes.data?.items || [],
-          distributors: Array.isArray(distRes.data) ? distRes.data : distRes.data?.items || [],
-          retailers: Array.isArray(retRes.data) ? retRes.data : retRes.data?.items || []
-        });
-      } catch (err) {
-        console.error("Partner hydration failed", err);
-      }
-    };
-    fetchPartners();
+    fetchInitialData();
   }, []);
+
+  const fetchInitialData = async () => {
+    try {
+      // 1. Fetch Partners for dropdowns
+      const [ssRes, distRes, retRes] = await Promise.all([
+        api.get('/partners/super-stockists').catch(() => ({ data: [] })),
+        api.get('/partners/distributors').catch(() => ({ data: [] })),
+        api.get('/partners/retailers').catch(() => ({ data: [] }))
+      ]);
+
+      setMasterData({
+        ss: Array.isArray(ssRes.data) ? ssRes.data : ssRes.data?.items || [],
+        distributors: Array.isArray(distRes.data) ? distRes.data : distRes.data?.items || [],
+        retailers: Array.isArray(retRes.data) ? retRes.data : retRes.data?.items || []
+      });
+
+      // 2. Fetch Global Company Summary
+      fetchGlobalSummary();
+    } catch (err) {
+      console.error("Hydration failed", err);
+    }
+  };
+
+  const fetchGlobalSummary = async () => {
+    try {
+      const res = await api.get('/finance/summary');
+      setGlobalSummary(res.data);
+    } catch (err) {
+      console.error("Failed to fetch global summary", err);
+    }
+  };
 
   // --- HELPERS ---
   const getActiveList = (type) => {
@@ -58,15 +75,26 @@ export default function FinanceMaster() {
     return [];
   };
 
-  const getPartnerName = (type, id) => {
-    const list = getActiveList(type);
-    const partner = list.find(x => x.id === parseInt(id));
-    if (!partner) return `Unknown Entity (${id})`;
-    return partner.name || partner.firm_name || partner.shop_name || `Entity ${id}`;
+  const getPartnerName = (partyType, partyId) => {
+    // Map backend type to frontend state key
+    const typeKey = partyType === 'SuperStockist' ? 'ss' : partyType.toLowerCase();
+    const list = masterData[typeKey] || [];
+    const partner = list.find(p => p.id === parseInt(partyId));
+    return partner ? (partner.name || partner.firm_name || partner.shop_name) : `ID: ${partyId}`;
   };
 
   const formatCurrency = (amount) => {
-    return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(amount);
+    return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(amount || 0);
+  };
+
+  const mapPartyType = (type) => {
+    const mapping = {
+      'ss': 'SuperStockist',
+      'super_stockist': 'SuperStockist',
+      'distributor': 'Distributor',
+      'retailer': 'Retailer'
+    };
+    return mapping[type] || type;
   };
 
   // --- API CALLS ---
@@ -76,11 +104,13 @@ export default function FinanceMaster() {
 
     setLoading(true);
     try {
-      const res = await api.get(`/finance/ledger/${ledgerParams.party_type}/${ledgerParams.party_id}`);
+      const backendType = mapPartyType(ledgerParams.party_type);
+      const res = await api.get(`/finance/ledger/${backendType}/${ledgerParams.party_id}`);
 
-      // Assuming backend returns { balance: 5000, transactions: [...] } OR just an array [...]
       if (Array.isArray(res.data)) {
         setLedgerData(res.data);
+        const latestBalance = res.data.length > 0 ? res.data[0].closing_balance : 0;
+        setLedgerBalance(latestBalance);
       } else {
         setLedgerData(res.data.transactions || res.data.items || []);
         setLedgerBalance(res.data.current_balance || res.data.outstanding_balance || 0);
@@ -96,9 +126,13 @@ export default function FinanceMaster() {
     e.preventDefault();
     const toastId = toast.loading('Processing payment securely...');
     try {
-      const payload = { ...paymentForm };
-      payload.party_id = parseInt(payload.party_id);
-      payload.amount = parseFloat(payload.amount);
+      const payload = {
+        party_type: mapPartyType(paymentForm.party_type),
+        party_id: parseInt(paymentForm.party_id),
+        amount: parseFloat(paymentForm.amount),
+        reference_document: paymentForm.reference_number || "N/A",
+        payment_mode: paymentForm.payment_mode
+      };
 
       await api.post('/finance/payments', payload);
 
@@ -106,14 +140,24 @@ export default function FinanceMaster() {
       setIsPaymentModalOpen(false);
       setPaymentForm({ party_type: 'ss', party_id: '', amount: '', payment_mode: 'UPI', reference_number: '', remarks: '' });
 
-      // If we are currently viewing this exact person's ledger, refresh it automatically!
-      if (ledgerParams.party_type === payload.party_type && parseInt(ledgerParams.party_id) === payload.party_id) {
+      // Refresh data
+      fetchGlobalSummary();
+      if (ledgerParams.party_type === paymentForm.party_type && ledgerParams.party_id === paymentForm.party_id) {
         fetchLedger();
       }
     } catch (err) {
       toast.error(`Transaction Failed: ${err.response?.data?.detail || err.message}`, { id: toastId });
     }
   };
+
+  const handleClearSelection = () => {
+    setLedgerParams({ party_type: 'ss', party_id: '' });
+    setLedgerData([]);
+  };
+
+  // Determine which data to display in the table
+  const isGlobalView = !ledgerParams.party_id;
+  const tableData = isGlobalView ? (globalSummary?.recent_global_transactions || []) : ledgerData;
 
   return (
     <div className="container-fluid p-4" style={{ backgroundColor: '#f8f9fa', minHeight: '100vh' }}>
@@ -125,12 +169,51 @@ export default function FinanceMaster() {
           <h3 className="fw-bolder m-0 text-dark" style={{ letterSpacing: '-0.5px' }}>
             <i className="fa-solid fa-indian-rupee-sign text-primary me-2"></i> Finance & Accounts
           </h3>
-          <p className="text-muted m-0 mt-1">Manage accounts receivable and monitor partner ledgers.</p>
+          <p className="text-muted m-0 mt-1">Manage accounts receivable, global ledgers, and log payments.</p>
         </div>
         <button className="btn btn-success shadow-sm rounded-pill px-4 fw-semibold btn-lg" onClick={() => setIsPaymentModalOpen(true)}>
           <i className="fa-solid fa-cash-register me-2"></i> Receive Payment
         </button>
       </div>
+
+      {/* GLOBAL KPI CARDS (Only show when no specific partner is selected) */}
+      {isGlobalView && globalSummary && (
+        <div className="row g-4 mb-4">
+          <div className="col-md-3">
+            <div className="card border-0 shadow-sm rounded-4 bg-primary text-white h-100">
+              <div className="card-body p-4">
+                <h6 className="text-uppercase fw-bold text-white-50 mb-2">Total Receivables</h6>
+                <h3 className="fw-bolder mb-0">{formatCurrency(globalSummary.metrics.total_receivables)}</h3>
+                <small className="text-white-50">Money owed to the company</small>
+              </div>
+            </div>
+          </div>
+          <div className="col-md-3">
+            <div className="card border-0 shadow-sm rounded-4 bg-white h-100">
+              <div className="card-body p-4">
+                <h6 className="text-uppercase fw-bold text-muted mb-2">Super Stockists</h6>
+                <h4 className="fw-bolder text-dark mb-0">{formatCurrency(globalSummary.metrics.breakdown.super_stockists)}</h4>
+              </div>
+            </div>
+          </div>
+          <div className="col-md-3">
+            <div className="card border-0 shadow-sm rounded-4 bg-white h-100">
+              <div className="card-body p-4">
+                <h6 className="text-uppercase fw-bold text-muted mb-2">Distributors</h6>
+                <h4 className="fw-bolder text-dark mb-0">{formatCurrency(globalSummary.metrics.breakdown.distributors)}</h4>
+              </div>
+            </div>
+          </div>
+          <div className="col-md-3">
+            <div className="card border-0 shadow-sm rounded-4 bg-white h-100">
+              <div className="card-body p-4">
+                <h6 className="text-uppercase fw-bold text-muted mb-2">Retailers</h6>
+                <h4 className="fw-bolder text-dark mb-0">{formatCurrency(globalSummary.metrics.breakdown.retailers)}</h4>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* LEDGER QUERY BAR */}
       <div className="card border-0 shadow-sm rounded-4 mb-4 bg-white">
@@ -144,35 +227,39 @@ export default function FinanceMaster() {
                 <option value="retailer">Retailer</option>
               </select>
             </div>
-            <div className="col-md-6">
+            <div className="col-md-5">
               <label className="form-label small fw-bold text-uppercase text-muted mb-1">Select Partner</label>
-              <select className="form-select border-0 bg-light shadow-sm rounded-3 py-2 fw-bold text-primary" required value={ledgerParams.party_id} onChange={e => setLedgerParams({...ledgerParams, party_id: e.target.value})}>
-                <option value="" disabled>Choose an account to view...</option>
+              <select className="form-select border-0 bg-light shadow-sm rounded-3 py-2 fw-bold text-primary" value={ledgerParams.party_id} onChange={e => setLedgerParams({...ledgerParams, party_id: e.target.value})}>
+                <option value="">-- View Global Master Ledger --</option>
                 {getActiveList(ledgerParams.party_type).map(p => (
                   <option key={p.id} value={p.id}>{p.name || p.firm_name || p.shop_name} (ID: {p.id})</option>
                 ))}
               </select>
             </div>
-            <div className="col-md-3">
+            <div className="col-md-4 d-flex gap-2">
               <button type="submit" className="btn btn-primary w-100 shadow-sm rounded-3 py-2 fw-bold" disabled={!ledgerParams.party_id || loading}>
                 {loading ? <i className="fa-solid fa-circle-notch fa-spin"></i> : <><i className="fa-solid fa-book-open me-2"></i> Load Ledger</>}
               </button>
+              {!isGlobalView && (
+                <button type="button" className="btn btn-light border w-100 shadow-sm rounded-3 py-2 fw-bold text-muted" onClick={handleClearSelection}>
+                  <i className="fa-solid fa-arrow-left me-2"></i> Back to Global
+                </button>
+              )}
             </div>
           </form>
         </div>
       </div>
 
-      {/* LEDGER DISPLAY */}
+      {/* LEDGER DISPLAY TABLE */}
       <div className="card border-0 shadow-sm rounded-4 overflow-hidden bg-white">
         <div className="card-header bg-white border-bottom-0 pt-4 pb-3 px-4 d-flex justify-content-between align-items-center">
           <h5 className="m-0 fw-bold text-dark">
-            <i className="fa-solid fa-file-invoice-dollar text-secondary me-2"></i>
-            Statement of Account
+            <i className={`fa-solid ${isGlobalView ? 'fa-globe' : 'fa-file-invoice-dollar'} text-secondary me-2`}></i>
+            {isGlobalView ? 'Recent Global Transactions' : 'Statement of Account'}
           </h5>
-          {ledgerData.length > 0 && (
+          {!isGlobalView && ledgerData.length > 0 && (
             <div className="text-end">
               <span className="small text-muted text-uppercase fw-bold me-2">Current Balance:</span>
-              {/* If backend sends balance, use ledgerBalance. Otherwise, calculate dynamically if needed, or hide */}
               <span className={`fs-4 fw-bolder ${ledgerBalance > 0 ? 'text-danger' : ledgerBalance < 0 ? 'text-success' : 'text-dark'}`}>
                 {formatCurrency(Math.abs(ledgerBalance))} {ledgerBalance > 0 ? ' (Dr)' : ledgerBalance < 0 ? ' (Cr)' : ''}
               </span>
@@ -186,6 +273,7 @@ export default function FinanceMaster() {
               <thead className="bg-light">
                 <tr>
                   <th className="px-4 py-3 text-uppercase text-muted fw-bold border-0" style={{ fontSize: '0.75rem' }}>Date & Time</th>
+                  {isGlobalView && <th className="py-3 text-uppercase text-muted fw-bold border-0" style={{ fontSize: '0.75rem' }}>Partner Entity</th>}
                   <th className="py-3 text-uppercase text-muted fw-bold border-0" style={{ fontSize: '0.75rem' }}>Ref / Txn ID</th>
                   <th className="py-3 text-uppercase text-muted fw-bold border-0" style={{ fontSize: '0.75rem' }}>Particulars</th>
                   <th className="text-end py-3 text-uppercase text-muted fw-bold border-0" style={{ fontSize: '0.75rem' }}>Debit (₹)</th>
@@ -194,37 +282,45 @@ export default function FinanceMaster() {
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan="5" className="text-center py-5"><div className="spinner-border text-primary"></div></td></tr>
-                ) : !ledgerParams.party_id && ledgerData.length === 0 ? (
-                  <tr><td colSpan="5" className="text-center py-5 text-muted"><i className="fa-solid fa-hand-pointer fs-2 mb-3 opacity-25 d-block"></i> Select an account above to view the ledger.</td></tr>
-                ) : ledgerData.length === 0 ? (
-                  <tr><td colSpan="5" className="text-center py-5 text-muted fw-bold"><i className="fa-solid fa-receipt fs-2 mb-3 opacity-25 d-block"></i> No transactions found for this account.</td></tr>
+                  <tr><td colSpan={isGlobalView ? "6" : "5"} className="text-center py-5"><div className="spinner-border text-primary"></div></td></tr>
+                ) : tableData.length === 0 ? (
+                  <tr><td colSpan={isGlobalView ? "6" : "5"} className="text-center py-5 text-muted fw-bold"><i className="fa-solid fa-receipt fs-2 mb-3 opacity-25 d-block"></i> No transactions found.</td></tr>
                 ) : (
-                  ledgerData.map((txn, idx) => {
-                    // Adjust these property names based on what your FastAPI backend actually returns
-                    const isCredit = txn.type === 'CREDIT' || txn.transaction_type === 'PAYMENT' || txn.amount < 0;
-                    const displayAmount = Math.abs(txn.amount || txn.value || 0);
+                  tableData.map((txn, idx) => {
+                    const isCredit = txn.credit_amount > 0;
 
                     return (
-                      <tr key={idx}>
+                      <tr key={txn.id || idx}>
                         <td className="px-4">
-                          <div className="text-dark fw-semibold">{new Date(txn.created_at || txn.date || Date.now()).toLocaleDateString('en-IN')}</div>
-                          <small className="text-muted">{new Date(txn.created_at || txn.date || Date.now()).toLocaleTimeString('en-IN')}</small>
+                          <div className="text-dark fw-semibold">{new Date(txn.created_at).toLocaleDateString('en-IN')}</div>
+                          <small className="text-muted">{new Date(txn.created_at).toLocaleTimeString('en-IN')}</small>
                         </td>
+
+                        {/* Extra column for Global View to identify the partner */}
+                        {isGlobalView && (
+                          <td>
+                            <div className="fw-bold text-dark">{getPartnerName(txn.party_type, txn.party_id)}</div>
+                            <span className="badge bg-secondary bg-opacity-10 text-secondary border border-secondary border-opacity-25" style={{ fontSize: '0.65rem' }}>
+                              {txn.party_type}
+                            </span>
+                          </td>
+                        )}
+
                         <td>
-                          <code className="bg-light text-dark px-2 py-1 rounded border">{txn.reference_number || txn.id || 'SYS-GEN'}</code>
+                          <code className="bg-light text-dark px-2 py-1 rounded border">{txn.reference_document || 'SYS-GEN'}</code>
                         </td>
                         <td>
                           <span className={`badge rounded-pill me-2 ${isCredit ? 'bg-success bg-opacity-10 text-success' : 'bg-danger bg-opacity-10 text-danger'}`}>
-                            {txn.type || (isCredit ? 'PAYMENT RECEIVED' : 'INVOICE ISSUED')}
+                            {txn.transaction_type}
                           </span>
-                          <span className="text-muted small">{txn.remarks || txn.description || '-'}</span>
+                          {!isGlobalView && <span className="text-muted small">Balance: {formatCurrency(txn.closing_balance)}</span>}
+                          {txn.remarks && <div className="text-muted small mt-1"><i className="fa-regular fa-comment-dots me-1"></i>{txn.remarks}</div>}
                         </td>
                         <td className="text-end fw-bold text-danger">
-                          {!isCredit ? formatCurrency(displayAmount) : '-'}
+                          {txn.debit_amount > 0 ? formatCurrency(txn.debit_amount) : '-'}
                         </td>
                         <td className="text-end fw-bold text-success">
-                          {isCredit ? formatCurrency(displayAmount) : '-'}
+                          {txn.credit_amount > 0 ? formatCurrency(txn.credit_amount) : '-'}
                         </td>
                       </tr>
                     );

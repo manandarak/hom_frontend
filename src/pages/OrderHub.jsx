@@ -5,8 +5,6 @@ import toast, { Toaster } from 'react-hot-toast';
 export default function OrderHub() {
   const [activeTab, setActiveTab] = useState('primary'); // 'primary', 'secondary', 'tertiary', 'consumers'
   const [loading, setLoading] = useState(false);
-
-  // --- DROPDOWN STATE FIX ---
   const [openDropdownId, setOpenDropdownId] = useState(null);
 
   useEffect(() => {
@@ -18,6 +16,24 @@ export default function OrderHub() {
   // --- HYDRATED MASTER DATA ---
   const [masterData, setMasterData] = useState({
     products: [], ss: [], distributors: [], retailers: [], consumers: []
+  });
+
+  // --- CASCADING GEO MASTER DATA (For Order Modal) ---
+  const [geoMaster, setGeoMaster] = useState({
+    zones: [], states: [], regions: [], areas: [], territories: []
+  });
+
+  const [geoFilter, setGeoFilter] = useState({
+    zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: ''
+  });
+
+  // --- CASCADING GEO MASTER DATA (For Consumer Modal) ---
+  const [consumerGeoMaster, setConsumerGeoMaster] = useState({
+    states: [], regions: [], areas: [], territories: []
+  });
+
+  const [consumerGeoFilter, setConsumerGeoFilter] = useState({
+    zone_id: '', state_id: '', region_id: '', area_id: ''
   });
 
   // --- CORE DATA STATES ---
@@ -36,12 +52,11 @@ export default function OrderHub() {
 
   // --- FORM STATES ---
   const [orderForm, setOrderForm] = useState({ from_id: '', to_id: '', product_id: '', quantity: '', batch_number: '' });
-  const [consumerForm, setConsumerForm] = useState({ name: '', phone: '', address: '' });
+  const [consumerForm, setConsumerForm] = useState({ name: '', phone: '', address: '', territory_id: '' });
   const [dispatchForm, setDispatchForm] = useState({
     transporter_name: '', vehicle_number: '', lr_number: '', driver_phone: '', estimated_arrival_date: ''
   });
 
-  // Full Routing Vector State for Primary Orders
   const [primaryRouting, setPrimaryRouting] = useState('FACTORY_TO_SS');
   const [availableBatches, setAvailableBatches] = useState([]);
 
@@ -49,13 +64,16 @@ export default function OrderHub() {
   useEffect(() => {
     const fetchMasterData = async () => {
       try {
-        const [prod, ss, dist, ret, cons] = await Promise.all([
+        const [prod, ss, dist, ret, cons, zn] = await Promise.all([
           api.get('/products').catch(() => ({ data: [] })),
           api.get('/partners/super-stockists').catch(() => ({ data: [] })),
           api.get('/partners/distributors').catch(() => ({ data: [] })),
           api.get('/partners/retailers').catch(() => ({ data: [] })),
-          api.get('/tertiary-sales/consumers').catch(() => ({ data: [] }))
+          api.get('/tertiary-sales/consumers').catch(() => ({ data: [] })),
+          // Fetch Base Zones Only. The rest will be fetched on demand.
+          api.get('/geo/zones').catch(() => ({ data: [] }))
         ]);
+
         setMasterData({
           products: Array.isArray(prod.data) ? prod.data : prod.data?.items || [],
           ss: Array.isArray(ss.data) ? ss.data : ss.data?.items || [],
@@ -63,6 +81,9 @@ export default function OrderHub() {
           retailers: Array.isArray(ret.data) ? ret.data : ret.data?.items || [],
           consumers: Array.isArray(cons.data) ? cons.data : cons.data?.items || []
         });
+
+        setGeoMaster(prev => ({ ...prev, zones: Array.isArray(zn.data) ? zn.data : zn.data?.items || [] }));
+
       } catch (err) { console.error("Hydration error", err); }
     };
     fetchMasterData();
@@ -80,15 +101,12 @@ export default function OrderHub() {
         const endpoint = activeTab === 'primary' ? '/primary-orders/'
                        : activeTab === 'secondary' ? '/secondary-sales/'
                        : '/tertiary-sales/';
-
         const res = await api.get(endpoint).catch(() => ({ data: [] }));
         setOrders(Array.isArray(res.data) ? res.data : res.data.items || res.data.orders || []);
       }
     } catch (err) {
       toast.error(`Failed to load ${activeTab} data.`);
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   };
 
   useEffect(() => { fetchData(); }, [activeTab]);
@@ -96,91 +114,148 @@ export default function OrderHub() {
   // --- 3. DYNAMIC BATCH FETCHING LOGIC ---
   useEffect(() => {
     const fetchAvailableBatches = async () => {
-      if (!orderForm.product_id) {
-        setAvailableBatches([]);
-        return;
-      }
-
+      if (!orderForm.product_id) return setAvailableBatches([]);
       let entityId = activeTab === 'primary' && primaryRouting.startsWith('FACTORY') ? 1 : orderForm.from_id;
       if (!entityId) return;
 
-      let endpoint = '';
-      if (activeTab === 'primary') {
-          if (primaryRouting === 'SS_TO_DB') endpoint = `/inventory/ss/${entityId}`;
-          else endpoint = `/inventory/factory/${entityId}`;
-      } else if (activeTab === 'secondary') {
-          endpoint = `/inventory/distributor/${entityId}`;
-      } else if (activeTab === 'tertiary') {
-          endpoint = `/inventory/retailer/${entityId}`;
-      }
+      let endpoint = activeTab === 'primary' ? (primaryRouting === 'SS_TO_DB' ? `/inventory/ss/${entityId}` : `/inventory/factory/${entityId}`)
+                   : activeTab === 'secondary' ? `/inventory/distributor/${entityId}`
+                   : `/inventory/retailer/${entityId}`;
 
       try {
         const res = await api.get(endpoint);
         const stockList = Array.isArray(res.data) ? res.data : res.data.items || [];
-        const productBatches = stockList.filter(
-          s => s.product_id === parseInt(orderForm.product_id) && ((s.current_stock || 0) > 0 || (s.current_stock_qty || 0) > 0)
-        );
-
+        const productBatches = stockList.filter(s => s.product_id === parseInt(orderForm.product_id) && ((s.current_stock || 0) > 0 || (s.current_stock_qty || 0) > 0));
         setAvailableBatches(productBatches);
-
-        if (productBatches.length === 1) {
-            setOrderForm(prev => ({ ...prev, batch_number: productBatches[0].batch_number }));
-        } else {
-            setOrderForm(prev => ({ ...prev, batch_number: '' }));
-        }
-      } catch (err) {
-        console.error("Failed to fetch batches", err);
-        setAvailableBatches([]);
-      }
+        setOrderForm(prev => ({ ...prev, batch_number: productBatches.length === 1 ? productBatches[0].batch_number : '' }));
+      } catch (err) { setAvailableBatches([]); }
     };
     fetchAvailableBatches();
   }, [orderForm.product_id, orderForm.from_id, activeTab, primaryRouting]);
 
+  // --- 4. TARGET IDENTIFICATION ---
+  const getTargetTier = () => {
+    if (activeTab === 'primary' && primaryRouting === 'FACTORY_TO_SS') return 'ss';
+    if (activeTab === 'primary' && (primaryRouting === 'FACTORY_TO_DB' || primaryRouting === 'SS_TO_DB')) return 'distributor';
+    if (activeTab === 'secondary') return 'retailer';
+    if (activeTab === 'tertiary') return 'consumer';
+    return null;
+  };
 
-  // --- 4. GEOFENCING LOGIC (STRICT HIERARCHY FILTERING) ---
+  // --- 5. HIERARCHICAL CASCADING API FETCHERS ---
+  const handleGeoChange = async (field, value) => {
+    setOrderForm(prev => ({ ...prev, to_id: '' })); // Reset destination
+
+    if (field === 'zone_id') {
+      setGeoFilter({ zone_id: value, state_id: '', region_id: '', area_id: '', territory_id: '' });
+      setGeoMaster(prev => ({ ...prev, states: [], regions: [], areas: [], territories: [] }));
+      if (value) {
+        const res = await api.get(`/geo/zones/${value}/states`).catch(() => ({ data: [] }));
+        setGeoMaster(prev => ({ ...prev, states: Array.isArray(res.data) ? res.data : res.data.items || [] }));
+      }
+    }
+    else if (field === 'state_id') {
+      setGeoFilter(prev => ({ ...prev, state_id: value, region_id: '', area_id: '', territory_id: '' }));
+      setGeoMaster(prev => ({ ...prev, regions: [], areas: [], territories: [] }));
+      if (value) {
+        const res = await api.get(`/geo/states/${value}/regions`).catch(() => ({ data: [] }));
+        setGeoMaster(prev => ({ ...prev, regions: Array.isArray(res.data) ? res.data : res.data.items || [] }));
+      }
+    }
+    else if (field === 'region_id') {
+      setGeoFilter(prev => ({ ...prev, region_id: value, area_id: '', territory_id: '' }));
+      setGeoMaster(prev => ({ ...prev, areas: [], territories: [] }));
+      if (value) {
+        const res = await api.get(`/geo/regions/${value}/areas`).catch(() => ({ data: [] }));
+        setGeoMaster(prev => ({ ...prev, areas: Array.isArray(res.data) ? res.data : res.data.items || [] }));
+      }
+    }
+    else if (field === 'area_id') {
+      setGeoFilter(prev => ({ ...prev, area_id: value, territory_id: '' }));
+      setGeoMaster(prev => ({ ...prev, territories: [] }));
+      if (value) {
+        const res = await api.get(`/geo/areas/${value}/territories`).catch(() => ({ data: [] }));
+        setGeoMaster(prev => ({ ...prev, territories: Array.isArray(res.data) ? res.data : res.data.items || [] }));
+      }
+    }
+    else if (field === 'territory_id') {
+      setGeoFilter(prev => ({ ...prev, territory_id: value }));
+    }
+  };
+
+  // Same logic for the Consumer Registration Modal
+  const handleConsumerGeoChange = async (field, value) => {
+    if (field === 'zone_id') {
+      setConsumerGeoFilter({ zone_id: value, state_id: '', region_id: '', area_id: '' });
+      setConsumerForm(prev => ({ ...prev, territory_id: '' }));
+      setConsumerGeoMaster({ states: [], regions: [], areas: [], territories: [] });
+      if (value) {
+        const res = await api.get(`/geo/zones/${value}/states`).catch(() => ({ data: [] }));
+        setConsumerGeoMaster(prev => ({ ...prev, states: Array.isArray(res.data) ? res.data : res.data.items || [] }));
+      }
+    }
+    else if (field === 'state_id') {
+      setConsumerGeoFilter(prev => ({ ...prev, state_id: value, region_id: '', area_id: '' }));
+      setConsumerForm(prev => ({ ...prev, territory_id: '' }));
+      setConsumerGeoMaster(prev => ({ ...prev, regions: [], areas: [], territories: [] }));
+      if (value) {
+        const res = await api.get(`/geo/states/${value}/regions`).catch(() => ({ data: [] }));
+        setConsumerGeoMaster(prev => ({ ...prev, regions: Array.isArray(res.data) ? res.data : res.data.items || [] }));
+      }
+    }
+    else if (field === 'region_id') {
+      setConsumerGeoFilter(prev => ({ ...prev, region_id: value, area_id: '' }));
+      setConsumerForm(prev => ({ ...prev, territory_id: '' }));
+      setConsumerGeoMaster(prev => ({ ...prev, areas: [], territories: [] }));
+      if (value) {
+        const res = await api.get(`/geo/regions/${value}/areas`).catch(() => ({ data: [] }));
+        setConsumerGeoMaster(prev => ({ ...prev, areas: Array.isArray(res.data) ? res.data : res.data.items || [] }));
+      }
+    }
+    else if (field === 'area_id') {
+      setConsumerGeoFilter(prev => ({ ...prev, area_id: value }));
+      setConsumerForm(prev => ({ ...prev, territory_id: '' }));
+      setConsumerGeoMaster(prev => ({ ...prev, territories: [] }));
+      if (value) {
+        const res = await api.get(`/geo/areas/${value}/territories`).catch(() => ({ data: [] }));
+        setConsumerGeoMaster(prev => ({ ...prev, territories: Array.isArray(res.data) ? res.data : res.data.items || [] }));
+      }
+    }
+  };
+
+
+  // --- 6. EXACT MODEL-BASED GEOFENCING ---
   const getFilteredDestinations = () => {
-    // 1. Factory can ship to ANY SS or DB (No geo limits)
-    if (activeTab === 'primary' && primaryRouting === 'FACTORY_TO_SS') return masterData.ss;
-    if (activeTab === 'primary' && primaryRouting === 'FACTORY_TO_DB') return masterData.distributors;
+    const targetTier = getTargetTier();
 
-    // Everything else requires an origin to be selected first
-    if (!orderForm.from_id) return [];
+    // Factory doesn't need an origin selected to show destinations. Others do.
+    if (!orderForm.from_id && !(activeTab === 'primary' && primaryRouting.startsWith('FACTORY'))) return [];
 
-    // 2. SS to DB: Must share Region or State
-    if (activeTab === 'primary' && primaryRouting === 'SS_TO_DB') {
-      const selectedSS = masterData.ss.find(s => s.id === parseInt(orderForm.from_id));
-      if (!selectedSS) return [];
-      return masterData.distributors.filter(db =>
-        (selectedSS.region_id && db.region_id === selectedSS.region_id) ||
-        (selectedSS.state_id && db.state_id === selectedSS.state_id) ||
-        (!selectedSS.region_id && !selectedSS.state_id) // Fallback if geo-data isn't fully mapped
-      );
+    if (targetTier === 'ss') {
+        let list = masterData.ss;
+        if (geoFilter.zone_id) list = list.filter(s => s.zone_id === parseInt(geoFilter.zone_id));
+        return list;
+    }
+    else if (targetTier === 'distributor') {
+        let list = masterData.distributors;
+        if (geoFilter.state_id) list = list.filter(d => d.state_id === parseInt(geoFilter.state_id));
+        return list;
+    }
+    else if (targetTier === 'retailer') {
+        let list = masterData.retailers;
+        if (geoFilter.territory_id) list = list.filter(r => r.territory_id === parseInt(geoFilter.territory_id));
+        return list;
+    }
+    else if (targetTier === 'consumer') {
+        let list = masterData.consumers;
+        if (geoFilter.territory_id) list = list.filter(c => c.territory_id === parseInt(geoFilter.territory_id));
+        return list;
     }
 
-    // 3. DB to Retailer: MUST share exact Territory (Enforced by backend)
-    if (activeTab === 'secondary') {
-      const selectedDB = masterData.distributors.find(d => d.id === parseInt(orderForm.from_id));
-      if (!selectedDB) return [];
-      return masterData.retailers.filter(r =>
-        (selectedDB.territory_id && r.territory_id === selectedDB.territory_id) ||
-        (!selectedDB.territory_id)
-      );
-    }
-
-    // 4. Retailer to Consumer: Filter by Territory if mapped
-    if (activeTab === 'tertiary') {
-      const selectedRetailer = masterData.retailers.find(r => r.id === parseInt(orderForm.from_id));
-      if (!selectedRetailer) return [];
-      return masterData.consumers.filter(c =>
-        (selectedRetailer.territory_id && c.territory_id === selectedRetailer.territory_id) ||
-        (!selectedRetailer.territory_id)
-      );
-    }
     return [];
   };
 
   const filteredDestinations = getFilteredDestinations();
-
 
   // --- HELPERS: ID TRANSLATORS ---
   const getProductName = (id) => {
@@ -206,6 +281,13 @@ export default function OrderHub() {
     e.preventDefault();
     const toastId = toast.loading(editingConsumerId ? 'Updating consumer...' : 'Registering consumer...');
     try {
+      const payload = {
+        name: consumerForm.name,
+        mobile_number: consumerForm.phone, // Mapped correctly here
+        address: consumerForm.address,
+        territory_id: parseInt(consumerForm.territory_id),
+        type: "Consumer" // Optional, default type
+      };
       if (editingConsumerId) {
         await api.patch(`/tertiary-sales/consumers/${editingConsumerId}`, consumerForm);
         toast.success('Consumer profile updated', { id: toastId });
@@ -214,7 +296,8 @@ export default function OrderHub() {
         toast.success('Consumer registered successfully', { id: toastId });
       }
       setIsConsumerModalOpen(false);
-      setConsumerForm({ name: '', phone: '', address: '' });
+      setConsumerForm({ name: '', phone: '', address: '', territory_id: '' });
+      setConsumerGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '' });
       fetchData();
     } catch (err) { toast.error(`Error: ${err.response?.data?.detail || err.message}`, { id: toastId }); }
   };
@@ -274,6 +357,7 @@ export default function OrderHub() {
       toast.success('Order placed successfully!', { id: toastId });
       setIsOrderModalOpen(false);
       setOrderForm({ from_id: '', to_id: '', product_id: '', quantity: '', batch_number: '' });
+      setGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: '' }); // Reset geo filters
       fetchData();
     } catch (err) {
       let errorMsg = err.response?.data?.detail || err.message;
@@ -335,12 +419,18 @@ export default function OrderHub() {
         </div>
         <div>
           {activeTab === 'consumers' ? (
-            <button className="btn btn-dark shadow-sm rounded-pill px-4 fw-semibold" onClick={() => { setEditingConsumerId(null); setConsumerForm({name:'', phone:'', address:''}); setIsConsumerModalOpen(true); }}>
+            <button className="btn btn-dark shadow-sm rounded-pill px-4 fw-semibold" onClick={() => {
+              setEditingConsumerId(null);
+              setConsumerForm({name:'', phone:'', address:'', territory_id:''});
+              setConsumerGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '' });
+              setIsConsumerModalOpen(true);
+            }}>
               <i className="fa-solid fa-user-plus me-2"></i> Register Barber / Consumer
             </button>
           ) : (
             <button className="btn btn-primary shadow-sm rounded-pill px-4 fw-semibold" onClick={() => {
               setOrderForm({ from_id: '', to_id: '', product_id: '', quantity: '', batch_number: '' });
+              setGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: '' });
               setIsOrderModalOpen(true);
             }}>
               <i className="fa-solid fa-cart-plus me-2"></i> Place {activeTab.charAt(0).toUpperCase() + activeTab.slice(1)} Order
@@ -393,7 +483,10 @@ export default function OrderHub() {
                     <td>
                       <div className="d-flex align-items-center">
                         <div className="bg-info bg-opacity-10 text-info rounded-circle d-flex justify-content-center align-items-center me-3" style={{ width: '40px', height: '40px' }}><i className="fa-solid fa-user"></i></div>
-                        <div className="fw-bolder text-dark fs-6">{c.name}</div>
+                        <div>
+                           <div className="fw-bolder text-dark fs-6">{c.name}</div>
+                           <span className="badge bg-light text-muted border px-2 py-1 mt-1" style={{fontSize: '0.65rem'}}>Territory ID: {c.territory_id}</span>
+                        </div>
                       </div>
                     </td>
                     <td>
@@ -603,19 +696,20 @@ export default function OrderHub() {
                 <div className="modal-body p-4 bg-light">
                   <div className="row g-4">
 
-                    {/* NEW: PRIMARY ROUTING VECTOR SELECTOR */}
+                    {/* PRIMARY ROUTING VECTOR SELECTOR */}
                     {activeTab === 'primary' && (
                       <div className="col-12 mb-2">
                         <label className="form-label small fw-bold text-uppercase text-muted mb-2">Primary Route Vector <span className="text-danger">*</span></label>
                         <div className="btn-group w-100 shadow-sm" role="group">
-                          <button type="button" className={`btn ${primaryRouting === 'FACTORY_TO_SS' ? 'btn-primary fw-bold' : 'btn-white bg-white text-muted border'}`} onClick={() => { setPrimaryRouting('FACTORY_TO_SS'); setOrderForm({...orderForm, from_id: '', to_id: ''}); }}>🏭 Factory ➝ 🏢 Super Stockist</button>
-                          <button type="button" className={`btn ${primaryRouting === 'FACTORY_TO_DB' ? 'btn-primary fw-bold' : 'btn-white bg-white text-muted border'}`} onClick={() => { setPrimaryRouting('FACTORY_TO_DB'); setOrderForm({...orderForm, from_id: '', to_id: ''}); }}>🏭 Factory ➝ 🚚 Distributor</button>
-                          <button type="button" className={`btn ${primaryRouting === 'SS_TO_DB' ? 'btn-primary fw-bold' : 'btn-white bg-white text-muted border'}`} onClick={() => { setPrimaryRouting('SS_TO_DB'); setOrderForm({...orderForm, from_id: '', to_id: ''}); }}>🏢 Super Stockist ➝ 🚚 Distributor</button>
+                          <button type="button" className={`btn ${primaryRouting === 'FACTORY_TO_SS' ? 'btn-primary fw-bold' : 'btn-white bg-white text-muted border'}`} onClick={() => { setPrimaryRouting('FACTORY_TO_SS'); setOrderForm({...orderForm, from_id: '', to_id: ''}); setGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: '' }); }}>🏭 Factory ➝ 🏢 Super Stockist</button>
+                          <button type="button" className={`btn ${primaryRouting === 'FACTORY_TO_DB' ? 'btn-primary fw-bold' : 'btn-white bg-white text-muted border'}`} onClick={() => { setPrimaryRouting('FACTORY_TO_DB'); setOrderForm({...orderForm, from_id: '', to_id: ''}); setGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: '' }); }}>🏭 Factory ➝ 🚚 Distributor</button>
+                          <button type="button" className={`btn ${primaryRouting === 'SS_TO_DB' ? 'btn-primary fw-bold' : 'btn-white bg-white text-muted border'}`} onClick={() => { setPrimaryRouting('SS_TO_DB'); setOrderForm({...orderForm, from_id: '', to_id: ''}); setGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: '' }); }}>🏢 Super Stockist ➝ 🚚 Distributor</button>
                         </div>
                       </div>
                     )}
 
-                    <div className="col-md-6">
+                    {/* 1. DISPATCH ORIGIN */}
+                    <div className="col-12">
                       <label className="form-label small fw-bold text-uppercase text-muted mb-1">Dispatch Origin <span className="text-danger">*</span></label>
 
                       {activeTab === 'primary' && primaryRouting.startsWith('FACTORY') ? (
@@ -631,29 +725,72 @@ export default function OrderHub() {
                             required
                             value={orderForm.from_id}
                             onChange={e => {
-                              // Reset Destination when Origin changes so geo-filtering applies cleanly
+                              // Reset Destination when Origin changes
                               setOrderForm({...orderForm, from_id: e.target.value, to_id: '', batch_number: ''});
                             }}
                           >
-                            {activeTab === 'primary' && primaryRouting === 'SS_TO_DB' && <option value="" disabled>Select Super Stockist...</option>}
-                            {activeTab === 'secondary' && <option value="" disabled>Select Distributor...</option>}
-                            {activeTab === 'tertiary' && <option value="" disabled>Select Retailer...</option>}
-
-                            {activeTab === 'primary' && primaryRouting === 'SS_TO_DB' && masterData.ss.map(p => (
-                              <option key={p.id} value={p.id}>{p.name || p.firm_name || p.shop_name} (ID: {p.id})</option>
-                            ))}
-                            {activeTab === 'secondary' && masterData.distributors.map(p => (
-                              <option key={p.id} value={p.id}>{p.name || p.firm_name || p.shop_name} (ID: {p.id})</option>
-                            ))}
-                            {activeTab === 'tertiary' && masterData.retailers.map(p => (
-                              <option key={p.id} value={p.id}>{p.name || p.firm_name || p.shop_name} (ID: {p.id})</option>
-                            ))}
+                            <option value="" disabled>Select Origin Sender...</option>
+                            {activeTab === 'primary' && primaryRouting === 'SS_TO_DB' && masterData.ss.map(p => <option key={p.id} value={p.id}>{p.name || p.firm_name || p.shop_name} (ID: {p.id})</option>)}
+                            {activeTab === 'secondary' && masterData.distributors.map(p => <option key={p.id} value={p.id}>{p.name || p.firm_name || p.shop_name} (ID: {p.id})</option>)}
+                            {activeTab === 'tertiary' && masterData.retailers.map(p => <option key={p.id} value={p.id}>{p.name || p.firm_name || p.shop_name} (ID: {p.id})</option>)}
                           </select>
                         </div>
                       )}
                     </div>
 
-                    <div className="col-md-6">
+                    {/* 2. DYNAMIC CASCADING GEO FILTER (Conditional rendering based on target tier) */}
+                    {(orderForm.from_id || (activeTab === 'primary' && primaryRouting.startsWith('FACTORY'))) && (
+                      <div className="col-12 p-3 bg-white rounded-4 shadow-sm border">
+                        <label className="form-label small fw-bold text-uppercase text-primary mb-2"><i className="fa-solid fa-earth-asia me-2"></i> Find Target by Geography</label>
+                        <div className="row g-2">
+
+                          {/* ALL TARGETS NEED ZONE */}
+                          <div className="col-md-3">
+                            <select className="form-select form-select-sm border bg-light shadow-none fw-semibold" value={geoFilter.zone_id} onChange={e => handleGeoChange('zone_id', e.target.value)}>
+                              <option value="">Select Zone</option>
+                              {geoMaster.zones.map(z => <option key={z.id} value={z.id}>{z.name}</option>)}
+                            </select>
+                          </div>
+
+                          {/* DISTRIBUTORS, RETAILERS, CONSUMERS NEED STATE */}
+                          {(getTargetTier() === 'distributor' || getTargetTier() === 'retailer' || getTargetTier() === 'consumer') && (
+                            <div className="col-md-3">
+                              <select className="form-select form-select-sm border bg-light shadow-none fw-semibold" value={geoFilter.state_id} onChange={e => handleGeoChange('state_id', e.target.value)} disabled={!geoFilter.zone_id}>
+                                <option value="">Select State</option>
+                                {geoMaster.states.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                              </select>
+                            </div>
+                          )}
+
+                          {/* ONLY RETAILERS & CONSUMERS NEED REGION, AREA, TERRITORY */}
+                          {(getTargetTier() === 'retailer' || getTargetTier() === 'consumer') && (
+                            <>
+                              <div className="col-md-3">
+                                <select className="form-select form-select-sm border bg-light shadow-none fw-semibold" value={geoFilter.region_id} onChange={e => handleGeoChange('region_id', e.target.value)} disabled={!geoFilter.state_id}>
+                                  <option value="">Select Region</option>
+                                  {geoMaster.regions.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                                </select>
+                              </div>
+                              <div className="col-md-3">
+                                <select className="form-select form-select-sm border bg-light shadow-none fw-semibold" value={geoFilter.area_id} onChange={e => handleGeoChange('area_id', e.target.value)} disabled={!geoFilter.region_id}>
+                                  <option value="">Select Area</option>
+                                  {geoMaster.areas.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                                </select>
+                              </div>
+                              <div className="col-md-3 mt-2">
+                                <select className="form-select form-select-sm border bg-light shadow-none fw-semibold border-primary text-primary" value={geoFilter.territory_id} onChange={e => handleGeoChange('territory_id', e.target.value)} disabled={!geoFilter.area_id}>
+                                  <option value="">Select Target Territory</option>
+                                  {geoMaster.territories.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                </select>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 3. DELIVERY DESTINATION */}
+                    <div className="col-12 mt-2">
                       <label className="form-label small fw-bold text-uppercase text-muted mb-1">Delivery Destination <span className="text-danger">*</span></label>
                       <div className="input-group bg-white rounded-3 shadow-sm border overflow-hidden">
                          <span className="input-group-text bg-white border-0"><i className={`fa-solid ${activeTab === 'primary' && primaryRouting === 'FACTORY_TO_SS' ? 'fa-building text-primary' : activeTab === 'primary' || activeTab === 'secondary' ? 'fa-truck-fast text-success' : 'fa-user text-warning'}`}></i></span>
@@ -665,12 +802,9 @@ export default function OrderHub() {
                           disabled={!orderForm.from_id && !(activeTab === 'primary' && primaryRouting.startsWith('FACTORY'))}
                         >
 
-                          {activeTab === 'primary' && primaryRouting === 'FACTORY_TO_SS' && <option value="" disabled>Select Super Stockist...</option>}
-                          {activeTab === 'primary' && (primaryRouting === 'FACTORY_TO_DB' || primaryRouting === 'SS_TO_DB') && <option value="" disabled>Select Distributor...</option>}
-                          {activeTab === 'secondary' && <option value="" disabled>Select Retailer...</option>}
-                          {activeTab === 'tertiary' && <option value="" disabled>Select Consumer / Barber...</option>}
+                          <option value="" disabled>Select Target Destination...</option>
 
-                          {/* RENDER FILTERED DESTINATIONS ONLY */}
+                          {/* RENDER DYNAMICALLY FILTERED DESTINATIONS */}
                           {filteredDestinations.map(p => (
                             <option key={p.id} value={p.id}>{p.name || p.firm_name || p.shop_name} (ID: {p.id})</option>
                           ))}
@@ -678,14 +812,15 @@ export default function OrderHub() {
                         </select>
                       </div>
 
-                      {/* Help text to explain why the dropdown might be empty */}
-                      {(!orderForm.from_id && !(activeTab === 'primary' && primaryRouting.startsWith('FACTORY'))) && (
-                        <div className="form-text text-danger mt-1 small" style={{fontSize: '0.7rem'}}>
-                          <i className="fa-solid fa-lock me-1"></i> Select Origin to unlock mapped destinations.
+                      {/* Empty state warning */}
+                      {filteredDestinations.length === 0 && (orderForm.from_id || (activeTab === 'primary' && primaryRouting.startsWith('FACTORY'))) && (
+                        <div className="form-text text-danger mt-1 small" style={{fontSize: '0.75rem'}}>
+                          <i className="fa-solid fa-triangle-exclamation me-1"></i> No partners found in the selected geographical area. Please adjust filters.
                         </div>
                       )}
                     </div>
 
+                    {/* TARGET PAYLOAD */}
                     <div className="col-md-5">
                       <label className="form-label small fw-bold text-uppercase text-muted mb-1">Target Payload (SKU) <span className="text-danger">*</span></label>
                       <div className="input-group bg-white rounded-3 shadow-sm border overflow-hidden">
@@ -868,7 +1003,7 @@ export default function OrderHub() {
       {/* --- MODAL: REGISTER CONSUMER --- */}
       {isConsumerModalOpen && (
         <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(15, 23, 42, 0.7)', backdropFilter: 'blur(5px)', zIndex: 1060 }}>
-          <div className="modal-dialog modal-dialog-centered">
+          <div className="modal-dialog modal-dialog-centered modal-lg">
             <div className="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
               <form onSubmit={handleConsumerSubmit}>
                 <div className="modal-header bg-dark bg-gradient text-white border-0 p-4">
@@ -882,18 +1017,56 @@ export default function OrderHub() {
                 </div>
                 <div className="modal-body p-4 bg-light">
                   <div className="row g-3">
-                    <div className="col-12">
+
+                    {/* CASCADING GEO ALLOCATION FOR CONSUMER */}
+                    <div className="col-12 p-3 bg-white rounded-4 shadow-sm border mb-2">
+                       <label className="form-label small fw-bold text-uppercase text-dark mb-2"><i className="fa-solid fa-map-location-dot me-2"></i> Territory Allocation <span className="text-danger">*</span></label>
+                       <div className="row g-2">
+                          <div className="col-md-3">
+                            <select className="form-select form-select-sm border bg-light shadow-none fw-semibold" value={consumerGeoFilter.zone_id} onChange={e => handleConsumerGeoChange('zone_id', e.target.value)}>
+                              <option value="">Select Zone</option>
+                              {geoMaster.zones.map(z => <option key={z.id} value={z.id}>{z.name}</option>)}
+                            </select>
+                          </div>
+                          <div className="col-md-3">
+                            <select className="form-select form-select-sm border bg-light shadow-none fw-semibold" value={consumerGeoFilter.state_id} onChange={e => handleConsumerGeoChange('state_id', e.target.value)} disabled={!consumerGeoFilter.zone_id}>
+                              <option value="">Select State</option>
+                              {consumerGeoMaster.states.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                            </select>
+                          </div>
+                          <div className="col-md-3">
+                            <select className="form-select form-select-sm border bg-light shadow-none fw-semibold" value={consumerGeoFilter.region_id} onChange={e => handleConsumerGeoChange('region_id', e.target.value)} disabled={!consumerGeoFilter.state_id}>
+                              <option value="">Select Region</option>
+                              {consumerGeoMaster.regions.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                            </select>
+                          </div>
+                          <div className="col-md-3">
+                            <select className="form-select form-select-sm border bg-light shadow-none fw-semibold" value={consumerGeoFilter.area_id} onChange={e => handleConsumerGeoChange('area_id', e.target.value)} disabled={!consumerGeoFilter.region_id}>
+                              <option value="">Select Area</option>
+                              {consumerGeoMaster.areas.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                            </select>
+                          </div>
+                          <div className="col-md-12 mt-2">
+                            <select className="form-select border shadow-none py-2 fw-bold border-dark" required value={consumerForm.territory_id} onChange={e => setConsumerForm({...consumerForm, territory_id: e.target.value})} disabled={!consumerGeoFilter.area_id}>
+                              <option value="">Select Assigned Territory...</option>
+                              {consumerGeoMaster.territories.map(t => <option key={t.id} value={t.id}>{t.name} (ID: {t.id})</option>)}
+                            </select>
+                          </div>
+                       </div>
+                    </div>
+
+                    <div className="col-md-6">
                       <label className="form-label small fw-bold text-uppercase text-muted mb-1">Consumer / Barber Name <span className="text-danger">*</span></label>
                       <div className="input-group bg-white rounded-3 shadow-sm border overflow-hidden">
                          <span className="input-group-text bg-white border-0 text-muted"><i className="fa-solid fa-user"></i></span>
-                         <input type="text" className="form-control form-control-lg border-0 shadow-none fw-semibold" required value={consumerForm.name} onChange={e => setConsumerForm({...consumerForm, name: e.target.value})} />
+                         <input type="text" className="form-control border-0 shadow-none fw-semibold py-2" required value={consumerForm.name} onChange={e => setConsumerForm({...consumerForm, name: e.target.value})} />
                       </div>
                     </div>
-                    <div className="col-12">
+                    <div className="col-md-6">
                       <label className="form-label small fw-bold text-uppercase text-muted mb-1">Contact Number <span className="text-danger">*</span></label>
                       <div className="input-group bg-white rounded-3 shadow-sm border overflow-hidden">
                          <span className="input-group-text bg-white border-0 text-muted"><i className="fa-solid fa-phone"></i></span>
-                         <input type="text" className="form-control border-0 shadow-none py-2 fw-semibold" required value={consumerForm.phone} onChange={e => setConsumerForm({...consumerForm, phone: e.target.value})} />
+                         <input type="text" className="form-control border-0 shadow-none fw-semibold py-2" required value={consumerForm.phone} onChange={e => setConsumerForm({...consumerForm, phone: e.target.value})} />
                       </div>
                     </div>
                     <div className="col-12">
