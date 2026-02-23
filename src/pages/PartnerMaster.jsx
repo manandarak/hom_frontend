@@ -17,9 +17,18 @@ export default function PartnerMaster() {
   const [activeTab, setActiveTab] = useState('ss'); // ss, distributors, retailers
   const [loading, setLoading] = useState(true);
 
+  // --- NEW: Geo Data State for Dropdowns ---
+  const [geoData, setGeoData] = useState({
+    zones: [],
+    states: [],
+    regions: [],
+    areas: [],
+    territories: []
+  });
+
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingId, setEditingId] = useState(null); // Tracks if we are editing an existing node
+  const [editingId, setEditingId] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [formData, setFormData] = useState(initialFormState);
 
@@ -30,44 +39,91 @@ export default function PartnerMaster() {
     return 'retailers';
   };
 
-  // BULLETPROOF NORMALIZERS: Safely handles whatever column names the backend throws at us
+  // NORMALIZERS
   const getPartnerName = (p) => p.name || p.firm_name || p.shop_name || "Unknown Entity";
   const getContactPerson = (p) => p.contact_person || "Not Provided";
   const getPhone = (p) => p.phone || p.contact_number || "";
   const getRegion = (p) => p.territory_id || p.zone_id || "";
 
-  const fetchAllPartners = async () => {
-    setLoading(true);
-    try {
-      const [ssRes, distRes, retRes] = await Promise.all([
-        api.get('/partners/super-stockists'),
-        api.get('/partners/distributors'),
-        api.get('/partners/retailers')
-      ]);
-      setPartners({
-        ss: ssRes.data,
-        distributors: distRes.data,
-        retailers: retRes.data
-      });
-    } catch (err) {
-      console.error("Failed to load partner matrix", err);
-      toast.error("Failed to load partner data from server.");
-    } finally {
-      setLoading(false);
-    }
+  // --- NEW: Helper to translate Geo ID to Geo Name in the table ---
+  const getGeoName = (id) => {
+    if (!id) return "Unassigned";
+
+    let found = null;
+    if (activeTab === 'ss') found = geoData.zones.find(z => z.id === id);
+    if (activeTab === 'distributors') found = geoData.zones.find(z => z.id === id) || geoData.states.find(s => s.id === id);
+    if (activeTab === 'retailers') found = geoData.territories.find(t => t.id === id) || geoData.areas.find(a => a.id === id);
+
+    return found ? found.name : `ID: ${id}`;
   };
 
+  // --- INITIAL DATA FETCH ---
   useEffect(() => {
-    fetchAllPartners();
+    const fetchInitialData = async () => {
+      setLoading(true);
+      try {
+        // Fetch Partners
+        const [ssRes, distRes, retRes] = await Promise.all([
+          api.get('/partners/super-stockists').catch(() => ({ data: [] })),
+          api.get('/partners/distributors').catch(() => ({ data: [] })),
+          api.get('/partners/retailers').catch(() => ({ data: [] }))
+        ]);
+        setPartners({
+          ss: Array.isArray(ssRes.data) ? ssRes.data : ssRes.data.items || [],
+          distributors: Array.isArray(distRes.data) ? distRes.data : distRes.data.items || [],
+          retailers: Array.isArray(retRes.data) ? retRes.data : retRes.data.items || []
+        });
+
+        // Fetch Geo Data for Dropdowns
+        const [zonesRes, statesRes, regionsRes, areasRes, terrRes] = await Promise.all([
+          api.get('/geo/zones').catch(() => ({ data: [] })),
+          api.get('/geo/states').catch(() => ({ data: [] })),
+          api.get('/geo/regions').catch(() => ({ data: [] })),
+          api.get('/geo/areas').catch(() => ({ data: [] })),
+          api.get('/geo/territories').catch(() => ({ data: [] }))
+        ]);
+
+        setGeoData({
+          zones: Array.isArray(zonesRes.data) ? zonesRes.data : [],
+          states: Array.isArray(statesRes.data) ? statesRes.data : [],
+          regions: Array.isArray(regionsRes.data) ? regionsRes.data : [],
+          areas: Array.isArray(areasRes.data) ? areasRes.data : [],
+          territories: Array.isArray(terrRes.data) ? terrRes.data : []
+        });
+
+      } catch (err) {
+        console.error("Hydration failed", err);
+        toast.error("Failed to load initial data.");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchInitialData();
   }, []);
+
+  const refetchPartners = async () => {
+    try {
+      const [ssRes, distRes, retRes] = await Promise.all([
+        api.get('/partners/super-stockists').catch(() => ({ data: [] })),
+        api.get('/partners/distributors').catch(() => ({ data: [] })),
+        api.get('/partners/retailers').catch(() => ({ data: [] }))
+      ]);
+      setPartners({
+        ss: Array.isArray(ssRes.data) ? ssRes.data : ssRes.data.items || [],
+        distributors: Array.isArray(distRes.data) ? distRes.data : distRes.data.items || [],
+        retailers: Array.isArray(retRes.data) ? retRes.data : retRes.data.items || []
+      });
+    } catch (err) { console.error(err); }
+  };
+
 
   const handleCloseModal = () => {
     setIsModalOpen(false);
-    setEditingId(null); // Reset edit mode
+    setEditingId(null);
     setFormData(initialFormState);
   };
 
-  // NEW: Pre-fills the modal with existing data when Edit is clicked
   const openEditModal = (partner) => {
     setEditingId(partner.id);
     setFormData({
@@ -82,32 +138,31 @@ export default function PartnerMaster() {
     setIsModalOpen(true);
   };
 
-  // NEW: Payload formatter to ensure backend gets EXACTLY the column names it expects
   const buildPayload = () => {
     const payload = { ...formData };
-
-    // Map our generic frontend state to your backend's specific DB columns
     if (activeTab === 'ss') {
       payload.firm_name = payload.name;
-      payload.zone_id = payload.territory_id;
+      payload.zone_id = parseInt(payload.territory_id);
       payload.contact_number = payload.phone;
       delete payload.name;
       delete payload.territory_id;
       delete payload.phone;
     } else if (activeTab === 'retailers') {
       payload.shop_name = payload.name;
+      payload.territory_id = parseInt(payload.territory_id);
       payload.contact_number = payload.phone;
       delete payload.name;
       delete payload.phone;
     } else if (activeTab === 'distributors') {
+      payload.zone_id = parseInt(payload.territory_id);
       payload.contact_number = payload.phone;
+      delete payload.territory_id;
       delete payload.phone;
+      delete payload.name;
     }
-
     return payload;
   };
 
-  // UPDATED: Now handles BOTH Create (POST) and Edit (PATCH)
   const handleFormSubmit = async (e) => {
     e.preventDefault();
     const endpoint = getEndpoint();
@@ -117,16 +172,14 @@ export default function PartnerMaster() {
 
     try {
       if (editingId) {
-        // PATCH for Update
         await api.patch(`/partners/${endpoint}/${editingId}`, payload);
         toast.success(`${activeTab.toUpperCase()} updated successfully!`, { id: toastId });
       } else {
-        // POST for Create
         await api.post(`/partners/${endpoint}`, payload);
         toast.success(`${activeTab.toUpperCase()} created successfully!`, { id: toastId });
       }
       handleCloseModal();
-      fetchAllPartners();
+      refetchPartners();
     } catch (err) {
       toast.error(`Error saving: ${err.response?.data?.detail || err.message}`, { id: toastId });
     }
@@ -135,11 +188,10 @@ export default function PartnerMaster() {
   const togglePartnerStatus = async (id, currentStatus) => {
     const endpoint = getEndpoint();
     const toastId = toast.loading('Updating network status...');
-
     try {
       await api.patch(`/partners/${endpoint}/${id}`, { is_active: !currentStatus });
       toast.success('Status updated', { id: toastId });
-      fetchAllPartners();
+      refetchPartners();
     } catch (err) {
       toast.error("Status update failed.", { id: toastId });
     }
@@ -155,19 +207,27 @@ export default function PartnerMaster() {
     try {
       await api.delete(`/partners/${endpoint}/${id}`);
       toast.success(`${displayName} removed from network.`, { id: toastId });
-      fetchAllPartners();
+      refetchPartners();
     } catch (err) {
       toast.error("Failed to delete partner.", { id: toastId });
     }
   };
 
-  // Safe filtering
   const activeList = activeTab === 'ss' ? partners.ss : activeTab === 'distributors' ? partners.distributors : partners.retailers;
   const filteredList = activeList.filter(p => {
     const safeName = getPartnerName(p);
     return safeName.toLowerCase().includes(searchQuery.toLowerCase()) ||
            (p.gstin && p.gstin.toLowerCase().includes(searchQuery.toLowerCase()));
   });
+
+  const getGeoLabelAndOptions = () => {
+    if (activeTab === 'ss') return { label: 'Assigned Zone', options: geoData.zones };
+    if (activeTab === 'distributors') return { label: 'Assigned Zone', options: geoData.zones };
+    if (activeTab === 'retailers') return { label: 'Assigned Territory', options: geoData.territories };
+    return { label: 'Location', options: [] };
+  };
+
+  const currentGeoConfig = getGeoLabelAndOptions();
 
   return (
     <div className="container-fluid p-4" style={{ backgroundColor: '#f8f9fa', minHeight: '100vh' }}>
@@ -186,7 +246,7 @@ export default function PartnerMaster() {
         </button>
       </div>
 
-      {/* METRIC CARDS */}
+      {/* RESTORED METRIC CARDS */}
       <div className="row g-4 mb-5">
         {[
           { title: 'Super Stockists', count: partners.ss.length, icon: 'fa-warehouse', color: 'primary' },
@@ -224,7 +284,6 @@ export default function PartnerMaster() {
             </button>
           </div>
 
-          {/* SEARCH BAR */}
           <div className="input-group shadow-sm rounded-pill overflow-hidden w-auto" style={{ minWidth: '300px' }}>
             <span className="input-group-text bg-white border-0 ps-4"><i className="fa-solid fa-magnifying-glass text-muted"></i></span>
             <input
@@ -247,7 +306,7 @@ export default function PartnerMaster() {
                 <th className="px-4 py-3 text-uppercase text-muted fw-bold border-bottom-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>Status</th>
                 <th className="py-3 text-uppercase text-muted fw-bold border-bottom-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>Entity Details</th>
                 <th className="py-3 text-uppercase text-muted fw-bold border-bottom-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>Contact</th>
-                <th className="py-3 text-uppercase text-muted fw-bold border-bottom-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>Territory/Zone</th>
+                <th className="py-3 text-uppercase text-muted fw-bold border-bottom-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>Location</th>
                 <th className="py-3 text-uppercase text-muted fw-bold border-bottom-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>GSTIN</th>
                 <th className="text-end px-4 py-3 text-uppercase text-muted fw-bold border-bottom-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>Actions</th>
               </tr>
@@ -260,11 +319,10 @@ export default function PartnerMaster() {
                   <td colSpan="6" className="text-center py-5 bg-light bg-opacity-50">
                     <div className="text-muted mb-3"><i className="fa-solid fa-box-open fs-1 opacity-25"></i></div>
                     <h5 className="text-muted fw-bold">No Records Found</h5>
-                    <p className="small text-muted mb-0">Adjust your search or click "Add New" to provision a node.</p>
                   </td>
                 </tr>
               ) : filteredList.map(p => (
-                <tr key={p.id} className={!p.is_active ? 'bg-light opacity-75' : ''} style={{ transition: 'all 0.2s ease' }}>
+                <tr key={p.id} className={!p.is_active ? 'bg-light opacity-75' : ''}>
                   <td className="px-4">
                     <span className={`badge rounded-pill px-3 py-2 ${p.is_active ? 'bg-success bg-opacity-10 text-success' : 'bg-danger bg-opacity-10 text-danger'}`}>
                       <i className={`fa-solid ${p.is_active ? 'fa-check-circle' : 'fa-ban'} me-1`}></i> {p.is_active ? 'ACTIVE' : 'INACTIVE'}
@@ -278,34 +336,16 @@ export default function PartnerMaster() {
                     <div className="small fw-semibold text-dark mb-1"><i className="fa-regular fa-user text-muted me-2"></i>{getContactPerson(p)}</div>
                     <div className="small text-muted"><i className="fa-solid fa-phone text-muted me-2"></i>{getPhone(p)}</div>
                   </td>
-                  <td><span className="badge bg-secondary bg-opacity-10 text-dark border border-secondary border-opacity-25 rounded-pill px-3">Zone/Territory {getRegion(p)}</span></td>
-                  <td>{p.gstin ? <code className="text-primary bg-primary bg-opacity-10 px-2 py-1 rounded fw-bold">{p.gstin}</code> : <span className="text-muted small">Not Registered</span>}</td>
+                  <td>
+                    <span className="badge bg-secondary bg-opacity-10 text-dark border border-secondary border-opacity-25 rounded-pill px-3">
+                      <i className="fa-solid fa-location-dot me-1 text-muted"></i> {getGeoName(getRegion(p))}
+                    </span>
+                  </td>
+                  <td>{p.gstin ? <code className="text-primary bg-primary bg-opacity-10 px-2 py-1 rounded fw-bold">{p.gstin}</code> : <span className="text-muted small">-</span>}</td>
                   <td className="text-end px-4" style={{ minWidth: '160px' }}>
-
-                    {/* NEW EDIT BUTTON */}
-                    <button
-                      className="btn btn-light btn-sm rounded-circle me-2 text-primary shadow-sm"
-                      title="Edit Details"
-                      onClick={() => openEditModal(p)}
-                    >
-                      <i className="fa-solid fa-pen-to-square"></i>
-                    </button>
-
-                    <button
-                      className={`btn btn-light btn-sm rounded-circle me-2 shadow-sm ${p.is_active ? 'text-warning' : 'text-success'}`}
-                      title={p.is_active ? 'Suspend Node' : 'Activate Node'}
-                      onClick={() => togglePartnerStatus(p.id, p.is_active)}
-                    >
-                      <i className={`fa-solid ${p.is_active ? 'fa-pause' : 'fa-play'}`}></i>
-                    </button>
-
-                    <button
-                      className="btn btn-light btn-sm rounded-circle text-danger shadow-sm"
-                      title="Delete Partner"
-                      onClick={() => handleDeletePartner(p.id, p)}
-                    >
-                      <i className="fa-regular fa-trash-can"></i>
-                    </button>
+                    <button className="btn btn-light btn-sm rounded-circle me-2 text-primary shadow-sm" onClick={() => openEditModal(p)}><i className="fa-solid fa-pen-to-square"></i></button>
+                    <button className={`btn btn-light btn-sm rounded-circle me-2 shadow-sm ${p.is_active ? 'text-warning' : 'text-success'}`} onClick={() => togglePartnerStatus(p.id, p.is_active)}><i className={`fa-solid ${p.is_active ? 'fa-pause' : 'fa-play'}`}></i></button>
+                    <button className="btn btn-light btn-sm rounded-circle text-danger shadow-sm" onClick={() => handleDeletePartner(p.id, p)}><i className="fa-regular fa-trash-can"></i></button>
                   </td>
                 </tr>
               ))}
@@ -314,14 +354,12 @@ export default function PartnerMaster() {
         </div>
       </div>
 
-      {/* DUAL-PURPOSE CREATE/EDIT MODAL */}
+      {/* MODAL */}
       {isModalOpen && (
         <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(15, 23, 42, 0.6)', backdropFilter: 'blur(4px)' }}>
           <div className="modal-dialog modal-dialog-centered modal-lg">
             <div className="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
               <form onSubmit={handleFormSubmit}>
-
-                {/* DYNAMIC HEADER: Changes color/text based on Edit vs Create */}
                 <div className={`modal-header bg-gradient text-white border-0 p-4 ${editingId ? 'bg-info' : 'bg-primary'}`}>
                   <h5 className="modal-title fw-bold">
                     <i className={`fa-solid ${editingId ? 'fa-pen-to-square' : 'fa-layer-group'} me-2`}></i>
@@ -334,7 +372,7 @@ export default function PartnerMaster() {
                   <div className="row g-4">
                     <div className="col-12">
                       <label className="form-label small fw-bold text-uppercase text-muted mb-1">Registered Entity Name <span className="text-danger">*</span></label>
-                      <input type="text" className="form-control form-control-lg border-0 shadow-sm rounded-3" required placeholder="e.g. Acme Logistics Pvt Ltd" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
+                      <input type="text" className="form-control form-control-lg border-0 shadow-sm rounded-3" required placeholder="e.g. Acme Logistics" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
                     </div>
                     <div className="col-md-6">
                       <label className="form-label small fw-bold text-uppercase text-muted mb-1">Primary Contact</label>
@@ -344,10 +382,22 @@ export default function PartnerMaster() {
                       <label className="form-label small fw-bold text-uppercase text-muted mb-1">Phone Number</label>
                       <input type="text" className="form-control border-0 shadow-sm rounded-3 py-2" placeholder="+91..." value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})} />
                     </div>
+
                     <div className="col-md-6">
-                      <label className="form-label small fw-bold text-uppercase text-muted mb-1">Territory / Zone ID <span className="text-danger">*</span></label>
-                      <input type="number" className="form-control border-0 shadow-sm rounded-3 py-2" required value={formData.territory_id} onChange={e => setFormData({...formData, territory_id: parseInt(e.target.value)})} />
+                      <label className="form-label small fw-bold text-uppercase text-muted mb-1">{currentGeoConfig.label} <span className="text-danger">*</span></label>
+                      <select
+                        className="form-select border-0 shadow-sm rounded-3 py-2 fw-semibold"
+                        required
+                        value={formData.territory_id}
+                        onChange={e => setFormData({...formData, territory_id: e.target.value})}
+                      >
+                        <option value="" disabled>Select {currentGeoConfig.label.toLowerCase()}...</option>
+                        {currentGeoConfig.options.map(loc => (
+                          <option key={loc.id} value={loc.id}>{loc.name} (ID: {loc.id})</option>
+                        ))}
+                      </select>
                     </div>
+
                     <div className="col-md-6">
                       <label className="form-label small fw-bold text-uppercase text-muted mb-1">GSTIN</label>
                       <input type="text" className="form-control border-0 shadow-sm rounded-3 py-2 text-uppercase" placeholder="22AAAAA0000A1Z5" value={formData.gstin} onChange={e => setFormData({...formData, gstin: e.target.value})} />
@@ -357,7 +407,6 @@ export default function PartnerMaster() {
 
                 <div className="modal-footer border-0 p-4 bg-white">
                   <button type="button" className="btn btn-light fw-semibold px-4 rounded-pill" onClick={handleCloseModal}>Cancel</button>
-                  {/* DYNAMIC BUTTON */}
                   <button type="submit" className={`btn fw-semibold px-5 rounded-pill shadow-sm ${editingId ? 'btn-info text-white' : 'btn-primary'}`}>
                     {editingId ? 'Save Changes' : 'Initialize Node'}
                   </button>

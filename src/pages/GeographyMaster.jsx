@@ -3,36 +3,45 @@ import api from '../api';
 import toast, { Toaster } from 'react-hot-toast';
 
 export default function GeographyMaster() {
-  const [data, setData] = useState({ zones: [], states: [], regions: [], areas: [], territories: [] });
   const [loading, setLoading] = useState(true);
 
-  // Track our current "depth" in the hierarchy
-  const [activeLevel, setActiveLevel] = useState('zone'); // 'zone', 'state', 'region', 'area', 'territory'
+  // --- HIERARCHICAL DATA STORE ---
+  // Instead of flat arrays, we map children to their parent IDs for instant tree rendering
+  const [dataStore, setDataStore] = useState({
+    root: [],      // Holds all Zones
+    zone: {},      // States mapped by Zone ID
+    state: {},     // Regions mapped by State ID
+    region: {},    // Areas mapped by Region ID
+    area: {}       // Territories mapped by Area ID
+  });
 
-  // Track selected parents
-  const [selection, setSelection] = useState({ zone: null, state: null, region: null, area: null });
+  // Tracks which folders in the tree are opened
+  const [expandedNodes, setExpandedNodes] = useState({ zone: {}, state: {}, region: {}, area: {} });
 
-  // We only need one input state now, since we only view one level at a time!
+  // Tracks the currently selected Node for the Right Pane Command Center
+  const [activeNode, setActiveNode] = useState({ level: 'root', id: null, name: 'Global Network' });
   const [newItemName, setNewItemName] = useState('');
 
-  // --- CONFIGURATION FOR LEVELS ---
-  const levelConfig = {
-    zone:      { title: 'Zones',       icon: 'fa-layer-group',  childLevel: 'state',     parentField: null,        dataKey: 'zones' },
-    state:     { title: 'States',      icon: 'fa-map',          childLevel: 'region',    parentField: 'zone_id',   dataKey: 'states' },
-    region:    { title: 'Regions',     icon: 'fa-map-pin',      childLevel: 'area',      parentField: 'state_id',  dataKey: 'regions' },
-    area:      { title: 'Areas',       icon: 'fa-draw-polygon', childLevel: 'territory', parentField: 'region_id', dataKey: 'areas' },
-    territory: { title: 'Territories', icon: 'fa-location-dot', childLevel: null,        parentField: 'area_id',   dataKey: 'territories' }
+  // --- CONFIGURATION ---
+  const config = {
+    root:      { title: 'Global Map', childLevel: 'zone',      childApi: 'zones',       childIdField: null,        icon: 'fa-globe',           color: 'dark' },
+    zone:      { title: 'Zone',       childLevel: 'state',     childApi: 'states',      childIdField: 'zone_id',   icon: 'fa-earth-americas',  color: 'primary' },
+    state:     { title: 'State',      childLevel: 'region',    childApi: 'regions',     childIdField: 'state_id',  icon: 'fa-map',             color: 'success' },
+    region:    { title: 'Region',     childLevel: 'area',      childApi: 'areas',       childIdField: 'region_id', icon: 'fa-map-location-dot',color: 'warning' },
+    area:      { title: 'Area',       childLevel: 'territory', childApi: 'territories', childIdField: 'area_id',   icon: 'fa-street-view',     color: 'info' },
+    territory: { title: 'Territory',  childLevel: null,        childApi: null,          childIdField: null,        icon: 'fa-location-crosshairs', color: 'danger' }
   };
 
+  // --- 1. INITIAL LOAD ---
   useEffect(() => {
-    fetchZones();
+    fetchRootZones();
   }, []);
 
-  const fetchZones = async () => {
+  const fetchRootZones = async () => {
     setLoading(true);
     try {
       const res = await api.get('/geo/zones');
-      setData(prev => ({ ...prev, zones: res.data }));
+      setDataStore(prev => ({ ...prev, root: res.data }));
     } catch (err) {
       toast.error('Failed to connect to Geography API.');
     } finally {
@@ -40,236 +49,319 @@ export default function GeographyMaster() {
     }
   };
 
-  // --- DRILL-DOWN HANDLER ---
-  const handleSelect = async (item) => {
-    const config = levelConfig[activeLevel];
-    if (!config.childLevel) return; // We are at Territory (the end)
+  // --- 2. LAZY LOAD CHILDREN ---
+  const fetchChildren = async (level, id) => {
+    const childConfig = config[level];
+    if (!childConfig.childLevel) return; // Territories have no children
 
-    const nextLevel = config.childLevel;
-    const nextDataKey = levelConfig[nextLevel].dataKey;
-
-    // Update selection path and clear downstream data
-    setSelection(prev => ({ ...prev, [activeLevel]: item }));
-
-    // Clear the data for the next level so we show a loading state or empty list cleanly
-    setData(prev => ({ ...prev, [nextDataKey]: [] }));
-
-    // Move UI to the next level
-    setActiveLevel(nextLevel);
-    setNewItemName('');
-
-    // Fetch the children
-    const toastId = toast.loading(`Loading ${levelConfig[nextLevel].title}...`);
     try {
       // e.g., /geo/zones/1/states
-      const res = await api.get(`/geo/${levelConfig[activeLevel].dataKey}/${item.id}/${nextDataKey}`);
-      setData(prev => ({ ...prev, [nextDataKey]: res.data }));
-      toast.dismiss(toastId);
+      const parentApiEntity = config[level].childApi === 'states' ? 'zones' : level + 's';
+      const res = await api.get(`/geo/${parentApiEntity}/${id}/${childConfig.childApi}`);
+
+      setDataStore(prev => ({
+        ...prev,
+        [level]: { ...prev[level], [id]: res.data }
+      }));
     } catch (err) {
-      toast.error(`Error loading data.`, { id: toastId });
+      toast.error(`Failed to load data for ${config[level].title}`);
     }
   };
 
-  // --- BREADCRUMB NAVIGATION ---
-  const jumpToLevel = (level) => {
-    setActiveLevel(level);
-    setNewItemName('');
+  // --- 3. TREE INTERACTION HANDLERS ---
+  const toggleExpand = async (e, level, id) => {
+    e.stopPropagation(); // Don't trigger the row click
+    const isExpanded = expandedNodes[level][id];
 
-    // Clear downstream selections based on where we jumped
-    if (level === 'zone') setSelection({ zone: null, state: null, region: null, area: null });
-    if (level === 'state') setSelection(prev => ({ ...prev, state: null, region: null, area: null }));
-    if (level === 'region') setSelection(prev => ({ ...prev, region: null, area: null }));
-    if (level === 'area') setSelection(prev => ({ ...prev, area: null }));
+    // If opening for the first time, fetch data
+    if (!isExpanded && !dataStore[level][id]) {
+      await fetchChildren(level, id);
+    }
+
+    setExpandedNodes(prev => ({
+      ...prev,
+      [level]: { ...prev[level], [id]: !isExpanded }
+    }));
   };
 
-  // --- CREATE HANDLER ---
+  const selectNode = async (level, id, name) => {
+    setActiveNode({ level, id, name });
+    setNewItemName('');
+
+    // Pre-fetch children for the right pane if not already loaded
+    if (level !== 'territory' && level !== 'root' && !dataStore[level][id]) {
+      await fetchChildren(level, id);
+    }
+  };
+
+  // --- 4. MUTATIONS ---
   const handleCreate = async () => {
     if (!newItemName.trim()) return;
 
-    const config = levelConfig[activeLevel];
-    const toastId = toast.loading(`Creating ${config.title.slice(0, -1)}...`);
+    const currConfig = config[activeNode.level];
+    const childLevel = currConfig.childLevel; // What are we creating?
+    const childConfig = config[childLevel];
+
+    const toastId = toast.loading(`Creating ${childConfig.title}...`);
 
     try {
       const payload = { name: newItemName };
 
-      // If we aren't creating a zone, we need to attach the parent ID
-      if (config.parentField) {
-        // Find the parent level name (e.g., if active is 'state', parent is 'zone')
-        const parentLevelName = Object.keys(levelConfig).find(key => levelConfig[key].childLevel === activeLevel);
-        payload[config.parentField] = selection[parentLevelName].id;
+      // If not creating a Zone, attach the Parent ID
+      if (childConfig.childIdField) {
+        payload[childConfig.childIdField] = activeNode.id;
       }
 
-      const endpoint = `/geo/${config.dataKey}`;
-      const res = await api.post(endpoint, payload);
+      const res = await api.post(`/geo/${childConfig.childApi}`, payload);
 
-      // Instantly update UI
-      setData(prev => ({
-        ...prev,
-        [config.dataKey]: [...prev[config.dataKey], res.data]
-      }));
+      // Instantly update the data store
+      if (activeNode.level === 'root') {
+        setDataStore(prev => ({ ...prev, root: [...prev.root, res.data] }));
+      } else {
+        setDataStore(prev => ({
+          ...prev,
+          [activeNode.level]: {
+            ...prev[activeNode.level],
+            [activeNode.id]: [...(prev[activeNode.level][activeNode.id] || []), res.data]
+          }
+        }));
+      }
 
       setNewItemName('');
-      toast.success('Created successfully!', { id: toastId });
+      toast.success(`${childConfig.title} created successfully!`, { id: toastId });
     } catch (err) {
-      toast.error(`Error: ` + (err.response?.data?.detail || err.message), { id: toastId });
+      toast.error(`Error: ${err.response?.data?.detail || err.message}`, { id: toastId });
     }
   };
 
-  // Determine what data to render currently
-  const currentConfig = levelConfig[activeLevel];
-  const currentData = data[currentConfig.dataKey];
+  const handleDeleteZone = async () => {
+    if (activeNode.level !== 'zone') return;
+    if (!window.confirm(`CRITICAL: Are you sure you want to delete the "${activeNode.name}" Zone? This may orphan linked downstream data.`)) return;
+
+    const toastId = toast.loading(`Deleting ${activeNode.name}...`);
+    try {
+      await api.delete(`/geo/zones/${activeNode.id}`);
+
+      // Remove from Root array
+      setDataStore(prev => ({ ...prev, root: prev.root.filter(z => z.id !== activeNode.id) }));
+
+      // Reset view to Global Network
+      setActiveNode({ level: 'root', id: null, name: 'Global Network' });
+      toast.success('Zone permanently deleted.', { id: toastId });
+    } catch (err) {
+      toast.error(`Failed to delete: ${err.response?.data?.detail || err.message}`, { id: toastId });
+    }
+  };
+
+  // --- DYNAMIC DATA FOR RIGHT PANE ---
+  const getRightPaneData = () => {
+    if (activeNode.level === 'root') return dataStore.root;
+    if (activeNode.level === 'territory') return []; // End of line
+    return dataStore[activeNode.level][activeNode.id] || [];
+  };
+
+  const activeData = getRightPaneData();
+  const activeCfg = config[activeNode.level];
+  const targetChildCfg = activeCfg.childLevel ? config[activeCfg.childLevel] : null;
+
+  // --- RECURSIVE TREE COMPONENT ---
+  const TreeNode = ({ level, item, depth = 0 }) => {
+    const isExpanded = expandedNodes[level] && expandedNodes[level][item.id];
+    const isSelected = activeNode.level === level && activeNode.id === item.id;
+    const nodeConfig = config[level];
+    const hasChildren = level !== 'territory';
+
+    return (
+      <div className="w-100">
+        <div
+          className={`d-flex align-items-center py-2 px-3 border-bottom border-light cursor-pointer ${isSelected ? `bg-${nodeConfig.color} bg-opacity-10 fw-bold border-start border-4 border-${nodeConfig.color}` : 'hover-bg-light'}`}
+          style={{ paddingLeft: `${depth * 20 + 15}px !important`, transition: 'all 0.1s ease', cursor: 'pointer' }}
+          onClick={() => selectNode(level, item.id, item.name)}
+        >
+          {/* Chevron for Expanding */}
+          <div style={{ width: '24px' }} className="text-center me-1" onClick={(e) => hasChildren && toggleExpand(e, level, item.id)}>
+            {hasChildren ? (
+              <i className={`fa-solid fa-chevron-${isExpanded ? 'down' : 'right'} small text-muted hover-text-dark`} style={{ cursor: 'pointer' }}></i>
+            ) : <span style={{ width: '14px', display: 'inline-block' }}></span>}
+          </div>
+
+          {/* Node Icon */}
+          <i className={`fa-solid ${nodeConfig.icon} text-${nodeConfig.color} me-2 opacity-75`}></i>
+
+          {/* Node Name */}
+          <span className={`text-truncate text-dark ${isSelected ? 'text-primary' : ''}`} style={{ fontSize: '0.9rem' }}>{item.name}</span>
+        </div>
+
+        {/* Render Children if Expanded */}
+        {isExpanded && hasChildren && dataStore[level][item.id] && (
+          <div className="tree-children">
+            {dataStore[level][item.id].map(child => (
+              <TreeNode key={child.id} level={nodeConfig.childLevel} item={child} depth={depth + 1} />
+            ))}
+            {dataStore[level][item.id].length === 0 && (
+               <div className="text-muted small py-1 fst-italic" style={{ paddingLeft: `${(depth + 1) * 20 + 45}px` }}>No {config[nodeConfig.childLevel].title}s mapped.</div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
-    <div className="container-fluid p-4 d-flex justify-content-center" style={{ backgroundColor: '#f4f7f8', minHeight: '100vh' }}>
+    <div className="container-fluid p-4 d-flex flex-column" style={{ backgroundColor: '#f4f7f8', height: '100vh', overflow: 'hidden' }}>
       <Toaster position="top-right" toastOptions={{ style: { borderRadius: '10px', background: '#333', color: '#fff' } }} />
 
-      {/* Main App Container - Max width applied for perfect 14-inch scaling */}
-      <div className="w-100" style={{ maxWidth: '900px' }}>
-
-        {/* HEADER */}
-        <div className="d-flex justify-content-between align-items-center mb-4">
-          <div>
-            <h3 className="fw-bolder m-0 text-dark" style={{ letterSpacing: '-0.5px' }}>
-              <i className="fa-solid fa-earth-asia text-primary me-2"></i> Geo-Spatial Configurator
-            </h3>
-            <p className="text-muted m-0 mt-1">Hierarchical drill-down management.</p>
-          </div>
-          <button onClick={() => { jumpToLevel('zone'); fetchZones(); }} className="btn btn-white bg-white shadow-sm border text-secondary fw-semibold rounded-pill px-4">
-            <i className="fa-solid fa-house me-2"></i> Reset
-          </button>
+      {/* HEADER */}
+      <div className="d-flex justify-content-between align-items-center mb-4 flex-shrink-0">
+        <div>
+          <h3 className="fw-bolder m-0 text-dark" style={{ letterSpacing: '-0.5px' }}>
+            <i className="fa-solid fa-map-location-dot text-primary me-2"></i> Geo-Spatial Configurator
+          </h3>
+          <p className="text-muted m-0 mt-1">AWS-style master/detail control center.</p>
         </div>
+      </div>
 
-        {/* BREADCRUMB NAVIGATION CARD */}
-        <div className="card border-0 shadow-sm rounded-4 mb-4 bg-white overflow-hidden">
-          <div className="card-body p-3 d-flex align-items-center flex-wrap gap-2">
+      {/* SPLIT PANE LAYOUT */}
+      <div className="row g-4 flex-grow-1 overflow-hidden pb-4">
 
-            <button
-              onClick={() => jumpToLevel('zone')}
-              className={`btn btn-sm rounded-pill px-3 fw-bold ${activeLevel === 'zone' ? 'btn-primary shadow-sm' : 'btn-light text-muted hover-bg-light'}`}
-            >
-              <i className="fa-solid fa-layer-group me-2"></i> Zones
-            </button>
-
-            {selection.zone && (
-              <>
-                <i className="fa-solid fa-chevron-right text-muted opacity-50 small"></i>
-                <button
-                  onClick={() => jumpToLevel('state')}
-                  className={`btn btn-sm rounded-pill px-3 fw-bold ${activeLevel === 'state' ? 'btn-primary shadow-sm' : 'btn-light text-muted hover-bg-light'}`}
-                >
-                  {selection.zone.name}
-                </button>
-              </>
-            )}
-
-            {selection.state && (
-              <>
-                <i className="fa-solid fa-chevron-right text-muted opacity-50 small"></i>
-                <button
-                  onClick={() => jumpToLevel('region')}
-                  className={`btn btn-sm rounded-pill px-3 fw-bold ${activeLevel === 'region' ? 'btn-primary shadow-sm' : 'btn-light text-muted hover-bg-light'}`}
-                >
-                  {selection.state.name}
-                </button>
-              </>
-            )}
-
-            {selection.region && (
-              <>
-                <i className="fa-solid fa-chevron-right text-muted opacity-50 small"></i>
-                <button
-                  onClick={() => jumpToLevel('area')}
-                  className={`btn btn-sm rounded-pill px-3 fw-bold ${activeLevel === 'area' ? 'btn-primary shadow-sm' : 'btn-light text-muted hover-bg-light'}`}
-                >
-                  {selection.region.name}
-                </button>
-              </>
-            )}
-
-            {selection.area && (
-              <>
-                <i className="fa-solid fa-chevron-right text-muted opacity-50 small"></i>
-                <button
-                  className={`btn btn-sm rounded-pill px-3 fw-bold ${activeLevel === 'territory' ? 'btn-primary shadow-sm' : 'btn-light text-muted'}`}
-                >
-                  {selection.area.name}
-                </button>
-              </>
-            )}
-
-          </div>
-        </div>
-
-        {/* LIST VIEW CARD */}
-        <div className="card border-0 shadow-sm rounded-4 bg-white">
-          <div className="card-header bg-white border-bottom-0 pt-4 pb-3 px-4 d-flex justify-content-between align-items-center">
-            <h5 className="m-0 fw-bold text-dark">
-              <i className={`fa-solid ${currentConfig.icon} text-primary me-2`}></i>
-              {activeLevel === 'zone' ? 'All Zones' : `${currentConfig.title} in ${selection[Object.keys(levelConfig).find(key => levelConfig[key].childLevel === activeLevel)]?.name}`}
-            </h5>
-            <span className="badge bg-light text-dark border rounded-pill px-3 py-2">{currentData.length} items</span>
-          </div>
-
-          {/* Input Area */}
-          <div className="px-4 pb-4">
-            <div className="input-group bg-light rounded-pill p-1 border border-primary border-opacity-25 shadow-sm">
-              <input
-                type="text"
-                className="form-control form-control-lg border-0 bg-transparent shadow-none ms-3"
-                placeholder={`Add a new ${currentConfig.title.slice(0, -1)} here...`}
-                value={newItemName}
-                onChange={e => setNewItemName(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleCreate()}
-              />
-              <button
-                className="btn btn-primary rounded-pill px-4 fw-bold"
-                disabled={!newItemName.trim()}
-                onClick={handleCreate}
-              >
-                <i className="fa-solid fa-plus me-2"></i> Add
+        {/* LEFT PANE: EXPLORER TREE */}
+        <div className="col-lg-4 col-xl-3 h-100">
+          <div className="card border-0 shadow-sm rounded-4 h-100 bg-white d-flex flex-column">
+            <div className="card-header bg-dark text-white border-0 py-3 px-4 d-flex justify-content-between align-items-center">
+              <h6 className="m-0 fw-bold"><i className="fa-solid fa-folder-tree me-2"></i> Network Explorer</h6>
+              <button className="btn btn-sm btn-outline-light border-0" onClick={() => selectNode('root', null, 'Global Network')} title="Go to Root">
+                 <i className="fa-solid fa-house"></i>
               </button>
             </div>
-          </div>
 
-          {/* Data List */}
-          <div className="card-body p-0">
-            {loading && activeLevel === 'zone' ? (
-               <div className="text-center py-5"><div className="spinner-border text-primary"></div></div>
-            ) : currentData.length === 0 ? (
-              <div className="text-center py-5 text-muted">
-                <i className="fa-solid fa-folder-open fs-1 mb-3 opacity-25"></i>
-                <h5>No {currentConfig.title} Found</h5>
-                <p className="small">Use the input above to create the first one.</p>
-              </div>
-            ) : (
-              <div className="list-group list-group-flush border-top">
-                {currentData.map((item, idx) => (
-                  <button
-                    key={item.id}
-                    onClick={() => handleSelect(item)}
-                    className={`list-group-item list-group-item-action border-0 py-3 px-4 d-flex justify-content-between align-items-center
-                      ${idx % 2 === 0 ? 'bg-transparent' : 'bg-light bg-opacity-50'} hover-bg-light`}
-                    style={{ transition: 'background-color 0.2s', cursor: currentConfig.childLevel ? 'pointer' : 'default' }}
+            <div className="card-body p-0 overflow-auto custom-scrollbar">
+              {loading && dataStore.root.length === 0 ? (
+                <div className="text-center py-5"><div className="spinner-border text-primary spinner-border-sm"></div></div>
+              ) : (
+                <div className="py-2">
+                  <div
+                    className={`d-flex align-items-center py-2 px-4 border-bottom border-light cursor-pointer ${activeNode.level === 'root' ? 'bg-dark bg-opacity-10 fw-bold border-start border-4 border-dark' : 'hover-bg-light'}`}
+                    onClick={() => selectNode('root', null, 'Global Network')}
+                    style={{ cursor: 'pointer' }}
                   >
-                    <div className="d-flex align-items-center">
-                      <div className="bg-primary bg-opacity-10 text-primary rounded-circle d-flex justify-content-center align-items-center me-3" style={{ width: '40px', height: '40px' }}>
-                        <i className={`fa-solid ${currentConfig.icon}`}></i>
-                      </div>
-                      <span className="fw-semibold text-dark fs-6">{item.name}</span>
-                    </div>
+                    <i className="fa-solid fa-globe text-dark me-2 opacity-75"></i>
+                    <span className="text-dark" style={{ fontSize: '0.9rem' }}>Global Network</span>
+                  </div>
+                  {dataStore.root.map(zone => (
+                    <TreeNode key={zone.id} level="zone" item={zone} depth={0} />
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
 
-                    <div className="d-flex align-items-center">
-                      <span className="text-muted small me-3 font-monospace">ID: {item.id}</span>
-                      {currentConfig.childLevel && (
-                        <div className="btn btn-sm btn-light rounded-circle text-primary border">
-                           <i className="fa-solid fa-arrow-right"></i>
-                        </div>
-                      )}
-                    </div>
+        {/* RIGHT PANE: COMMAND CENTER */}
+        <div className="col-lg-8 col-xl-9 h-100">
+          <div className="card border-0 shadow-sm rounded-4 h-100 bg-white d-flex flex-column">
+
+            {/* Command Center Header */}
+            <div className={`card-header bg-${activeCfg.color} bg-opacity-10 border-bottom border-${activeCfg.color} border-opacity-25 pt-4 pb-3 px-4 d-flex justify-content-between align-items-center`}>
+              <div>
+                <span className={`badge bg-${activeCfg.color} text-white rounded-pill px-3 py-1 mb-2 shadow-sm`}>
+                  <i className={`fa-solid ${activeCfg.icon} me-1`}></i> {activeCfg.title} Level
+                </span>
+                <h4 className="m-0 fw-bold text-dark d-flex align-items-center">
+                  {activeNode.name}
+                  {activeNode.id && <span className="ms-2 small font-monospace text-muted opacity-50 fs-6">ID: #{activeNode.id}</span>}
+                </h4>
+              </div>
+
+              {/* ONLY SHOW DELETE IF IT IS A ZONE */}
+              {activeNode.level === 'zone' && (
+                <button className="btn btn-outline-danger bg-white shadow-sm rounded-pill px-4 fw-bold" onClick={handleDeleteZone}>
+                  <i className="fa-regular fa-trash-can me-2"></i> Delete Zone
+                </button>
+              )}
+            </div>
+
+            {/* Input Form Area (If it has children) */}
+            {targetChildCfg && (
+              <div className="px-4 py-3 bg-light border-bottom">
+                <label className="form-label small fw-bold text-uppercase text-muted mb-1">
+                  Add New {targetChildCfg.title} to {activeNode.name}
+                </label>
+                <div className={`input-group bg-white rounded-pill p-1 border border-${targetChildCfg.color} shadow-sm`}>
+                  <input
+                    type="text"
+                    className="form-control border-0 bg-transparent shadow-none ms-3 fw-semibold"
+                    placeholder={`Enter ${targetChildCfg.title.toLowerCase()} name...`}
+                    value={newItemName}
+                    onChange={e => setNewItemName(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleCreate()}
+                  />
+                  <button
+                    className={`btn btn-${targetChildCfg.color} rounded-pill px-4 fw-bold text-white shadow-sm`}
+                    disabled={!newItemName.trim()}
+                    onClick={handleCreate}
+                  >
+                    <i className="fa-solid fa-plus me-2"></i> Create Node
                   </button>
-                ))}
+                </div>
               </div>
             )}
+
+            {/* Content Data Table */}
+            <div className="card-body p-0 overflow-auto custom-scrollbar flex-grow-1">
+              {!targetChildCfg ? (
+                 <div className="text-center py-5 text-muted mt-5">
+                   <i className={`fa-solid ${activeCfg.icon} fs-1 mb-3 text-${activeCfg.color} opacity-25`}></i>
+                   <h5 className="fw-bold">Terminal Node Reached</h5>
+                   <p className="small">Territories represent the finest level of granularity. No further subdivisions possible.</p>
+                 </div>
+              ) : activeData.length === 0 ? (
+                 <div className="text-center py-5 text-muted mt-4">
+                   <i className="fa-solid fa-diagram-project fs-1 mb-3 opacity-25"></i>
+                   <h5 className="fw-bold">No Mapped {targetChildCfg.title}s</h5>
+                   <p className="small">Use the input above to begin populating this sector.</p>
+                 </div>
+              ) : (
+                <table className="table table-hover align-middle m-0">
+                  <thead className="bg-white sticky-top shadow-sm z-1">
+                    <tr>
+                      <th className="px-4 py-3 text-uppercase text-muted fw-bold border-0" style={{ fontSize: '0.75rem' }}>Node Info</th>
+                      <th className="py-3 text-uppercase text-muted fw-bold border-0" style={{ fontSize: '0.75rem' }}>Hierarchy Mapping</th>
+                      <th className="text-end px-4 py-3 text-uppercase text-muted fw-bold border-0" style={{ fontSize: '0.75rem' }}>Explore</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {activeData.map((item, idx) => (
+                      <tr key={item.id} className={idx % 2 === 0 ? 'bg-transparent' : 'bg-light bg-opacity-50'}>
+                        <td className="px-4 py-3">
+                          <div className="d-flex align-items-center">
+                            <div className={`bg-${targetChildCfg.color} bg-opacity-10 text-${targetChildCfg.color} rounded-circle d-flex justify-content-center align-items-center me-3`} style={{ width: '40px', height: '40px' }}>
+                              <i className={`fa-solid ${targetChildCfg.icon}`}></i>
+                            </div>
+                            <div>
+                              <div className="fw-bolder text-dark fs-6">{item.name}</div>
+                              <div className="small text-muted font-monospace opacity-75">ID: #{item.id}</div>
+                            </div>
+                          </div>
+                        </td>
+                        <td>
+                          <span className="badge bg-secondary bg-opacity-10 text-dark border rounded-pill px-3 py-1">
+                            {targetChildCfg.title}
+                          </span>
+                        </td>
+                        <td className="text-end px-4">
+                          <button
+                            className={`btn btn-sm btn-outline-${targetChildCfg.color} rounded-pill px-3 fw-bold`}
+                            onClick={() => selectNode(targetChildCfg.title.toLowerCase(), item.id, item.name)}
+                          >
+                            Drill Down <i className="fa-solid fa-arrow-right ms-1"></i>
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
           </div>
         </div>
 

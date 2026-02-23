@@ -43,13 +43,13 @@ function App() {
           <Route path="products" element={<ProductMaster />} />
           <Route path="partners" element={<PartnerMaster />} />
 
-          {/* Identity & Access Management */}
+          {/* Identity, Access & Finance */}
           <Route path="users" element={<UserMatrix />} />
           <Route path="finance" element={<FinanceMaster />} />
-          <Route path="order-hub" element={<OrderHub />} />
 
-          {/* Placeholders for remaining modules */}
-          <Route path="orders" element={<div className="p-4"><h1>Order Hub</h1><p>API connection pending...</p></div>} />
+          {/* Supply Chain Execution */}
+          <Route path="orders" element={<OrderHub />} />
+
         </Route>
       </Routes>
     </BrowserRouter>
