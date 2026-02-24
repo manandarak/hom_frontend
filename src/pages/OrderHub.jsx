@@ -1,9 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import api from '../api';
 import toast, { Toaster } from 'react-hot-toast';
+import { AuthContext } from '../context/AuthContext'; // <-- Imported AuthContext
 
 export default function OrderHub() {
-  const [activeTab, setActiveTab] = useState('primary'); // 'primary', 'secondary', 'tertiary', 'consumers'
+  const { user } = useContext(AuthContext); // <-- Grab the logged-in user
+
+  // Initialize active tab based on role (Retailers shouldn't default to primary)
+  const defaultTab = user?.role === 'Retailer' ? 'tertiary' : 'primary';
+  const [activeTab, setActiveTab] = useState(defaultTab);
   const [loading, setLoading] = useState(false);
   const [openDropdownId, setOpenDropdownId] = useState(null);
 
@@ -60,6 +65,25 @@ export default function OrderHub() {
   const [primaryRouting, setPrimaryRouting] = useState('FACTORY_TO_SS');
   const [availableBatches, setAvailableBatches] = useState([]);
 
+  // --- RBAC PERMISSION HELPERS ---
+  const isAdminOrInternal = ['Admin', 'ZSM', 'RSM', 'ASM', 'SO'].includes(user?.role);
+
+  const canViewPrimary = isAdminOrInternal || ['SuperStockist', 'Distributor'].includes(user?.role);
+  const canViewSecondary = isAdminOrInternal || ['Distributor', 'Retailer'].includes(user?.role);
+  const canViewTertiary = isAdminOrInternal || ['Retailer'].includes(user?.role);
+
+  const canPlacePrimary = isAdminOrInternal || user?.role === 'SuperStockist' || user?.permissions?.includes('create_primary_order');
+  const canPlaceSecondary = isAdminOrInternal || user?.role === 'Distributor' || user?.permissions?.includes('create_secondary_order');
+  const canPlaceTertiary = isAdminOrInternal || user?.role === 'Retailer' || user?.permissions?.includes('create_tertiary_order');
+  const canManageConsumers = isAdminOrInternal || user?.role === 'Retailer';
+
+  // Determine if user can place order in CURRENT active tab
+  const canPlaceOrderInCurrentTab =
+    (activeTab === 'primary' && canPlacePrimary) ||
+    (activeTab === 'secondary' && canPlaceSecondary) ||
+    (activeTab === 'tertiary' && canPlaceTertiary);
+
+
   // --- 1. HYDRATION ON MOUNT ---
   useEffect(() => {
     const fetchMasterData = async () => {
@@ -70,7 +94,6 @@ export default function OrderHub() {
           api.get('/partners/distributors').catch(() => ({ data: [] })),
           api.get('/partners/retailers').catch(() => ({ data: [] })),
           api.get('/tertiary-sales/consumers').catch(() => ({ data: [] })),
-          // Fetch Base Zones Only. The rest will be fetched on demand.
           api.get('/geo/zones').catch(() => ({ data: [] }))
         ]);
 
@@ -183,7 +206,6 @@ export default function OrderHub() {
     }
   };
 
-  // Same logic for the Consumer Registration Modal
   const handleConsumerGeoChange = async (field, value) => {
     if (field === 'zone_id') {
       setConsumerGeoFilter({ zone_id: value, state_id: '', region_id: '', area_id: '' });
@@ -223,12 +245,10 @@ export default function OrderHub() {
     }
   };
 
-
   // --- 6. EXACT MODEL-BASED GEOFENCING ---
   const getFilteredDestinations = () => {
     const targetTier = getTargetTier();
 
-    // Factory doesn't need an origin selected to show destinations. Others do.
     if (!orderForm.from_id && !(activeTab === 'primary' && primaryRouting.startsWith('FACTORY'))) return [];
 
     if (targetTier === 'ss') {
@@ -283,10 +303,10 @@ export default function OrderHub() {
     try {
       const payload = {
         name: consumerForm.name,
-        mobile_number: consumerForm.phone, // Mapped correctly here
+        mobile_number: consumerForm.phone,
         address: consumerForm.address,
         territory_id: parseInt(consumerForm.territory_id),
-        type: "Consumer" // Optional, default type
+        type: "Consumer"
       };
       if (editingConsumerId) {
         await api.patch(`/tertiary-sales/consumers/${editingConsumerId}`, consumerForm);
@@ -357,7 +377,7 @@ export default function OrderHub() {
       toast.success('Order placed successfully!', { id: toastId });
       setIsOrderModalOpen(false);
       setOrderForm({ from_id: '', to_id: '', product_id: '', quantity: '', batch_number: '' });
-      setGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: '' }); // Reset geo filters
+      setGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: '' });
       fetchData();
     } catch (err) {
       let errorMsg = err.response?.data?.detail || err.message;
@@ -418,7 +438,8 @@ export default function OrderHub() {
           <p className="text-muted m-0 mt-1">Manage Primary, Secondary, and Tertiary distribution funnels.</p>
         </div>
         <div>
-          {activeTab === 'consumers' ? (
+          {/* DYNAMIC NEW ORDER / REGISTRATION BUTTONS */}
+          {activeTab === 'consumers' && canManageConsumers ? (
             <button className="btn btn-dark shadow-sm rounded-pill px-4 fw-semibold" onClick={() => {
               setEditingConsumerId(null);
               setConsumerForm({name:'', phone:'', address:'', territory_id:''});
@@ -427,7 +448,7 @@ export default function OrderHub() {
             }}>
               <i className="fa-solid fa-user-plus me-2"></i> Register Barber / Consumer
             </button>
-          ) : (
+          ) : activeTab !== 'consumers' && canPlaceOrderInCurrentTab ? (
             <button className="btn btn-primary shadow-sm rounded-pill px-4 fw-semibold" onClick={() => {
               setOrderForm({ from_id: '', to_id: '', product_id: '', quantity: '', batch_number: '' });
               setGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: '' });
@@ -435,26 +456,39 @@ export default function OrderHub() {
             }}>
               <i className="fa-solid fa-cart-plus me-2"></i> Place {activeTab.charAt(0).toUpperCase() + activeTab.slice(1)} Order
             </button>
-          )}
+          ) : null}
         </div>
       </div>
 
-      {/* TIER NAVIGATION */}
+      {/* TIER NAVIGATION (RBAC FILTERED) */}
       <div className="card border-0 shadow-sm rounded-4 mb-4 bg-white">
         <div className="card-body p-2 d-flex flex-column flex-md-row justify-content-between align-items-center gap-3">
           <div className="nav nav-pills p-1 bg-light rounded-pill w-100 d-flex text-center shadow-sm border border-light">
-            <button className={`nav-link rounded-pill flex-grow-1 ${activeTab === 'primary' ? 'active bg-primary shadow text-white fw-bold' : 'text-muted fw-semibold hover-bg-white'}`} onClick={() => setActiveTab('primary')}>
-              <i className="fa-solid fa-industry me-2"></i> Primary <span className="opacity-75 ms-1 fw-normal">(Factory / SS)</span>
-            </button>
-            <button className={`nav-link rounded-pill flex-grow-1 ${activeTab === 'secondary' ? 'active bg-success shadow text-white fw-bold' : 'text-muted fw-semibold hover-bg-white'}`} onClick={() => setActiveTab('secondary')}>
-              <i className="fa-solid fa-truck-ramp-box me-2"></i> Secondary <span className="opacity-75 ms-1 fw-normal">(DB <i className="fa-solid fa-arrow-right mx-1 small"></i> Retailer)</span>
-            </button>
-            <button className={`nav-link rounded-pill flex-grow-1 ${activeTab === 'tertiary' ? 'active bg-warning shadow text-dark fw-bold' : 'text-muted fw-semibold hover-bg-white'}`} onClick={() => setActiveTab('tertiary')}>
-              <i className="fa-solid fa-shop me-2"></i> Tertiary <span className="opacity-75 ms-1 fw-normal">(Retailer <i className="fa-solid fa-arrow-right mx-1 small"></i> Barber)</span>
-            </button>
-            <button className={`nav-link rounded-pill flex-grow-1 ${activeTab === 'consumers' ? 'active bg-dark shadow text-white fw-bold' : 'text-muted fw-semibold hover-bg-white'}`} onClick={() => setActiveTab('consumers')}>
-              <i className="fa-solid fa-users me-2"></i> Consumers
-            </button>
+
+            {canViewPrimary && (
+              <button className={`nav-link rounded-pill flex-grow-1 ${activeTab === 'primary' ? 'active bg-primary shadow text-white fw-bold' : 'text-muted fw-semibold hover-bg-white'}`} onClick={() => setActiveTab('primary')}>
+                <i className="fa-solid fa-industry me-2"></i> Primary <span className="opacity-75 ms-1 fw-normal">(Factory / SS)</span>
+              </button>
+            )}
+
+            {canViewSecondary && (
+              <button className={`nav-link rounded-pill flex-grow-1 ${activeTab === 'secondary' ? 'active bg-success shadow text-white fw-bold' : 'text-muted fw-semibold hover-bg-white'}`} onClick={() => setActiveTab('secondary')}>
+                <i className="fa-solid fa-truck-ramp-box me-2"></i> Secondary <span className="opacity-75 ms-1 fw-normal">(DB <i className="fa-solid fa-arrow-right mx-1 small"></i> Retailer)</span>
+              </button>
+            )}
+
+            {canViewTertiary && (
+              <button className={`nav-link rounded-pill flex-grow-1 ${activeTab === 'tertiary' ? 'active bg-warning shadow text-dark fw-bold' : 'text-muted fw-semibold hover-bg-white'}`} onClick={() => setActiveTab('tertiary')}>
+                <i className="fa-solid fa-shop me-2"></i> Tertiary <span className="opacity-75 ms-1 fw-normal">(Retailer <i className="fa-solid fa-arrow-right mx-1 small"></i> Barber)</span>
+              </button>
+            )}
+
+            {canViewTertiary && (
+              <button className={`nav-link rounded-pill flex-grow-1 ${activeTab === 'consumers' ? 'active bg-dark shadow text-white fw-bold' : 'text-muted fw-semibold hover-bg-white'}`} onClick={() => setActiveTab('consumers')}>
+                <i className="fa-solid fa-users me-2"></i> Consumers
+              </button>
+            )}
+
           </div>
         </div>
       </div>
@@ -471,7 +505,7 @@ export default function OrderHub() {
                   <th className="px-4 py-3 text-uppercase text-muted fw-bold border-0" style={{ fontSize: '0.75rem' }}>Registry ID</th>
                   <th className="py-3 text-uppercase text-muted fw-bold border-0" style={{ fontSize: '0.75rem' }}>Identity Details</th>
                   <th className="py-3 text-uppercase text-muted fw-bold border-0" style={{ fontSize: '0.75rem' }}>Contact Info</th>
-                  <th className="text-end px-4 py-3 text-uppercase text-muted fw-bold border-0" style={{ fontSize: '0.75rem' }}>Actions</th>
+                  {canManageConsumers && <th className="text-end px-4 py-3 text-uppercase text-muted fw-bold border-0" style={{ fontSize: '0.75rem' }}>Actions</th>}
                 </tr>
               </thead>
               <tbody>
@@ -493,10 +527,12 @@ export default function OrderHub() {
                       <div className="small fw-semibold text-dark mb-1"><i className="fa-solid fa-phone text-primary me-2"></i>{c.phone}</div>
                       <div className="small text-muted"><i className="fa-solid fa-location-dot text-danger me-2"></i>{c.address || 'Address not logged'}</div>
                     </td>
-                    <td className="text-end px-4">
-                      <button className="btn btn-light btn-sm rounded-circle me-2 text-primary shadow-sm border border-primary border-opacity-25" onClick={() => { setEditingConsumerId(c.id); setConsumerForm(c); setIsConsumerModalOpen(true); }}><i className="fa-solid fa-pen"></i></button>
-                      <button className="btn btn-light btn-sm rounded-circle text-danger shadow-sm border border-danger border-opacity-25" onClick={() => handleDeleteConsumer(c.id, c.name)}><i className="fa-solid fa-trash"></i></button>
-                    </td>
+                    {canManageConsumers && (
+                      <td className="text-end px-4">
+                        <button className="btn btn-light btn-sm rounded-circle me-2 text-primary shadow-sm border border-primary border-opacity-25" onClick={() => { setEditingConsumerId(c.id); setConsumerForm(c); setIsConsumerModalOpen(true); }}><i className="fa-solid fa-pen"></i></button>
+                        <button className="btn btn-light btn-sm rounded-circle text-danger shadow-sm border border-danger border-opacity-25" onClick={() => handleDeleteConsumer(c.id, c.name)}><i className="fa-solid fa-trash"></i></button>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -550,6 +586,11 @@ export default function OrderHub() {
                   const batch = itemInfo ? itemInfo.batch_number : o.batch_number;
 
                   const isDispatched = (o.status === 'DISPATCHED' || o.status === 'Dispatched' || o.status === 'Partially Dispatched');
+
+                  // Role checks for actions
+                  const canDispatch = isAdminOrInternal || (activeTab === 'primary' && user?.role === 'SuperStockist') || (activeTab === 'secondary' && user?.role === 'Distributor');
+                  const canReceive = isAdminOrInternal || (activeTab === 'primary' && ['SuperStockist', 'Distributor'].includes(user?.role)) || (activeTab === 'secondary' && user?.role === 'Retailer');
+                  const canApproveTertiary = isAdminOrInternal || user?.role === 'Retailer';
 
                   return (
                   <tr key={o.id}>
@@ -614,7 +655,7 @@ export default function OrderHub() {
                             style={{ position: 'absolute', right: 0, top: '100%', zIndex: 1050 }}
                           >
                             {/* DISPATCH ACTION */}
-                            {(activeTab === 'primary' || activeTab === 'secondary') && (o.status === 'Pending' || o.status === 'PENDING') &&
+                            {canDispatch && (activeTab === 'primary' || activeTab === 'secondary') && (o.status === 'Pending' || o.status === 'PENDING') &&
                               <li>
                                 <button className="dropdown-item rounded-3 text-info fw-bold py-2 mb-1"
                                   onClick={() => {
@@ -651,12 +692,12 @@ export default function OrderHub() {
                             )}
 
                             {/* Receive Action */}
-                            {(activeTab === 'primary' || activeTab === 'secondary') && isDispatched &&
+                            {canReceive && (activeTab === 'primary' || activeTab === 'secondary') && isDispatched &&
                               <li><button className="dropdown-item rounded-3 text-success fw-bold py-2 mb-1" onClick={() => handleOrderStatus('receive', o.id)}><div className="bg-success bg-opacity-10 d-inline-block p-2 rounded-circle me-2"><i className="fa-solid fa-box-open text-success"></i></div> Mark Received</button></li>
                             }
 
                             {/* Approve Action */}
-                            {activeTab === 'tertiary' && (o.status === 'Pending' || o.status === 'PENDING') &&
+                            {canApproveTertiary && activeTab === 'tertiary' && (o.status === 'Pending' || o.status === 'PENDING') &&
                               <li><button className="dropdown-item rounded-3 text-success fw-bold py-2 mb-1" onClick={() => handleOrderStatus('approve', o.id)}><div className="bg-success bg-opacity-10 d-inline-block p-2 rounded-circle me-2"><i className="fa-solid fa-check text-success"></i></div> Approve Sale</button></li>
                             }
 
