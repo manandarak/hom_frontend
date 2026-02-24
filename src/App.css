@@ -1,3 +1,6 @@
+/* ========================================================================
+   1. CORE VARIABLES & BASE STYLING (YOUR ORIGINAL STYLES)
+  ======================================================================== */
 :root {
   --primary: #2563eb;
   --secondary: #475569;
@@ -14,6 +17,7 @@ body {
   color: #334155;
   overflow-x: hidden;
   margin: 0;
+  transition: background-color 0.3s ease, color 0.3s ease; /* Smooth transition */
 }
 
 /* Sidebar Styling */
@@ -25,6 +29,7 @@ body {
   color: #cbd5e1;
   padding-top: 20px;
   z-index: 1000;
+  transition: background-color 0.3s ease;
 }
 
 .sidebar .nav-link {
@@ -58,6 +63,7 @@ body {
   margin-left: 260px;
   padding: 20px 30px;
   min-height: 100vh;
+  transition: background-color 0.3s ease;
 }
 
 .top-navbar {
@@ -69,6 +75,7 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  transition: all 0.3s ease;
 }
 
 /* Cards & Widgets */
@@ -80,6 +87,7 @@ body {
   box-shadow: 0 4px 6px -1px rgba(0,0,0,0.02);
   position: relative;
   overflow: hidden;
+  transition: all 0.3s ease;
 }
 
 .kpi-icon {
@@ -114,6 +122,7 @@ body {
   border: 1px solid #e2e8f0;
   box-shadow: 0 4px 6px -1px rgba(0,0,0,0.02);
   margin-bottom: 24px;
+  transition: all 0.3s ease;
 }
 
 .dashboard-card-header {
@@ -145,9 +154,122 @@ body {
   padding: 25px;
   border: 1px solid #e2e8f0;
   box-shadow: 0 4px 6px -1px rgba(0,0,0,0.02);
+  transition: all 0.3s ease;
 }
 
 .width-20 {
   width: 20px;
   text-align: center;
 }
+
+
+/* ========================================================================
+   2. TOGGLEABLE DARK MODE OVERRIDES (Only active when moon is clicked)
+  ======================================================================== */
+
+body.dark-theme {
+  --bg-color: #0B1120;
+  background-color: var(--bg-color) !important;
+  color: #F8FAFC !important;
+  color-scheme: dark;
+}
+
+/* Override structural backgrounds */
+body.dark-theme .main-content,
+body.dark-theme .container-fluid {
+  background-color: #0B1120 !important;
+}
+
+/* Override your custom Dashboard Cards & Navbars */
+body.dark-theme .top-navbar,
+body.dark-theme .kpi-card,
+body.dark-theme .dashboard-card,
+body.dark-theme .test-panel,
+body.dark-theme .card,
+body.dark-theme .modal-content,
+body.dark-theme .bg-white {
+  background-color: #131B2F !important;
+  border-color: #26324A !important;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4) !important;
+}
+
+body.dark-theme .dashboard-card-header,
+body.dark-theme .modal-header,
+body.dark-theme .modal-footer {
+  border-bottom-color: #26324A !important;
+  border-top-color: #26324A !important;
+  color: #F8FAFC !important;
+}
+
+/* Override your custom Text Colors */
+body.dark-theme .kpi-title { color: #94A3B8 !important; }
+body.dark-theme .kpi-value { color: #F8FAFC !important; }
+body.dark-theme .text-dark { color: #F8FAFC !important; }
+body.dark-theme .text-muted { color: #94A3B8 !important; }
+body.dark-theme .bg-light { background-color: #1E293B !important; }
+
+/* Override standard Bootstrap Tables */
+body.dark-theme .table {
+  --bs-table-bg: transparent !important;
+  color: #F8FAFC !important;
+  border-color: #26324A !important;
+}
+body.dark-theme .table thead th,
+body.dark-theme .table thead tr,
+body.dark-theme .table thead.bg-light {
+  background-color: #1E293B !important;
+  color: #F8FAFC !important;
+  border-bottom: 2px solid #26324A !important;
+}
+body.dark-theme .table tbody tr:hover { background-color: rgba(255, 255, 255, 0.05) !important; }
+body.dark-theme .table td { border-color: #26324A !important; }
+
+/* Override standard Bootstrap Inputs & Forms */
+body.dark-theme .form-control,
+body.dark-theme .form-select,
+body.dark-theme .input-group-text {
+  background-color: #0B1120 !important;
+  border: 1px solid #26324A !important;
+  color: #F8FAFC !important;
+}
+body.dark-theme .input-group-text { background-color: #1E293B !important; }
+body.dark-theme .form-control:focus,
+body.dark-theme .form-select:focus {
+  background-color: #0B1120 !important;
+  border-color: #3B82F6 !important;
+  box-shadow: 0 0 0 0.25rem rgba(59, 130, 246, 0.15) !important;
+  color: #F8FAFC !important;
+}
+body.dark-theme .form-control::placeholder { color: #475569 !important; }
+
+/* Override generic buttons & list groups */
+body.dark-theme .btn-light,
+body.dark-theme .btn-white {
+  background-color: #1E293B !important;
+  color: #F8FAFC !important;
+  border: 1px solid #26324A !important;
+}
+body.dark-theme .btn-light:hover { background-color: #2A344A !important; }
+
+body.dark-theme .list-group-item {
+  background-color: #131B2F !important;
+  border-color: #26324A !important;
+  color: #F8FAFC !important;
+}
+
+body.dark-theme .dropdown-menu {
+  background-color: #131B2F !important;
+  border: 1px solid #26324A !important;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.8) !important;
+}
+body.dark-theme .dropdown-item { color: #F8FAFC !important; }
+body.dark-theme .dropdown-item:hover {
+  background-color: #1E293B !important;
+  color: #F8FAFC !important;
+}
+
+/* Custom Scrollbar for Dark Mode */
+body.dark-theme ::-webkit-scrollbar { width: 8px; height: 8px; }
+body.dark-theme ::-webkit-scrollbar-track { background: #0B1120; }
+body.dark-theme ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+body.dark-theme ::-webkit-scrollbar-thumb:hover { background: #475569; }

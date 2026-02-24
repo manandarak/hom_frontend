@@ -16,7 +16,7 @@ const initialUserForm = {
 };
 
 export default function UserMatrix() {
-  const [activeTab, setActiveTab] = useState('users'); // 'users', 'roles'
+  const [activeTab, setActiveTab] = useState('users'); // 'users', 'matrix'
   const [loading, setLoading] = useState(false);
 
   // Data States
@@ -32,17 +32,19 @@ export default function UserMatrix() {
   // Modal States
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
   const [isRoleModalOpen, setIsRoleModalOpen] = useState(false);
-  const [isPermissionModalOpen, setIsPermissionModalOpen] = useState(false);
 
   // Tracking Edit States
   const [editingUserId, setEditingUserId] = useState(null);
-  const [activeRoleForPerms, setActiveRoleForPerms] = useState(null);
 
   // Forms
   const [userForm, setUserForm] = useState(initialUserForm);
   const [roleForm, setRoleForm] = useState({ name: '', description: '' });
-  const [selectedPermissionIds, setSelectedPermissionIds] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
+
+  // --- MATRIX STATE ---
+  // Tracks exactly which permissions belong to which role: { roleId: [permId1, permId2] }
+  const [matrixState, setMatrixState] = useState({});
+  const [dirtyRoles, setDirtyRoles] = useState(new Set()); // Tracks which columns were edited
 
   // --- API FETCHERS ---
   const fetchData = async () => {
@@ -52,16 +54,25 @@ export default function UserMatrix() {
         api.get('/users/'),
         api.get('/users/roles'),
         api.get('/users/permissions'),
-        api.get('/geo/zones').catch(() => ({ data: [] })) // Fetch base zones
+        api.get('/geo/zones').catch(() => ({ data: [] }))
       ]);
-      setUsers(Array.isArray(usersRes.data) ? usersRes.data : usersRes.data.items || []);
-      setRoles(Array.isArray(rolesRes.data) ? rolesRes.data : rolesRes.data.items || []);
-      setPermissions(Array.isArray(permsRes.data) ? permsRes.data : permsRes.data.items || []);
 
-      setGeoMaster(prev => ({
-        ...prev,
-        zones: Array.isArray(zonesRes.data) ? zonesRes.data : zonesRes.data?.items || []
-      }));
+      const fetchedUsers = Array.isArray(usersRes.data) ? usersRes.data : usersRes.data.items || [];
+      const fetchedRoles = Array.isArray(rolesRes.data) ? rolesRes.data : rolesRes.data.items || [];
+      const fetchedPerms = Array.isArray(permsRes.data) ? permsRes.data : permsRes.data.items || [];
+
+      setUsers(fetchedUsers);
+      setRoles(fetchedRoles);
+      setPermissions(fetchedPerms);
+      setGeoMaster(prev => ({ ...prev, zones: Array.isArray(zonesRes.data) ? zonesRes.data : zonesRes.data?.items || [] }));
+
+      // Initialize Matrix State from fetched roles
+      const initialMatrix = {};
+      fetchedRoles.forEach(role => {
+        initialMatrix[role.id] = role.permissions ? role.permissions.map(p => p.id || p) : [];
+      });
+      setMatrixState(initialMatrix);
+      setDirtyRoles(new Set()); // Clear dirty state on fresh load
 
     } catch (err) {
       toast.error('Failed to load Identity & Access data.');
@@ -129,7 +140,6 @@ export default function UserMatrix() {
         assigned_area_id: user.assigned_area_id || '',
         assigned_territory_id: user.assigned_territory_id || ''
       });
-      // Clear downstream geo lists. User must re-select from top to modify existing hierarchy
       setGeoMaster(prev => ({ ...prev, states: [], regions: [], areas: [], territories: [] }));
     } else {
       setEditingUserId(null);
@@ -146,8 +156,6 @@ export default function UserMatrix() {
     try {
       const payload = { ...userForm };
       payload.role_id = parseInt(payload.role_id);
-
-      // Parse integers or null for geo scoping
       payload.assigned_zone_id = payload.assigned_zone_id ? parseInt(payload.assigned_zone_id) : null;
       payload.assigned_state_id = payload.assigned_state_id ? parseInt(payload.assigned_state_id) : null;
       payload.assigned_region_id = payload.assigned_region_id ? parseInt(payload.assigned_region_id) : null;
@@ -182,7 +190,7 @@ export default function UserMatrix() {
     }
   };
 
-  // --- ROLE & PERMISSION MUTATIONS ---
+  // --- ROLE / MATRIX MUTATIONS ---
   const handleRoleSubmit = async (e) => {
     e.preventDefault();
     const toastId = toast.loading('Creating new role policy...');
@@ -197,31 +205,38 @@ export default function UserMatrix() {
     }
   };
 
-  const openPermissionModal = (role) => {
-    setActiveRoleForPerms(role);
-    const existingPermIds = role.permissions ? role.permissions.map(p => p.id || p) : [];
-    setSelectedPermissionIds(existingPermIds);
-    setIsPermissionModalOpen(true);
+  const toggleMatrixPermission = (roleId, permId) => {
+    setMatrixState(prev => {
+      const rolePerms = prev[roleId] || [];
+      const newPerms = rolePerms.includes(permId)
+        ? rolePerms.filter(id => id !== permId)
+        : [...rolePerms, permId];
+
+      return { ...prev, [roleId]: newPerms };
+    });
+
+    // Mark this role as dirty so we know we need to save it
+    setDirtyRoles(prev => new Set(prev).add(roleId));
   };
 
-  const togglePermission = (permId) => {
-    setSelectedPermissionIds(prev =>
-      prev.includes(permId) ? prev.filter(id => id !== permId) : [...prev, permId]
-    );
-  };
+  const saveMatrixChanges = async () => {
+    if (dirtyRoles.size === 0) return;
 
-  const handlePermissionsSubmit = async (e) => {
-    e.preventDefault();
-    const toastId = toast.loading('Applying permission policy...');
+    const toastId = toast.loading(`Saving matrix changes for ${dirtyRoles.size} roles...`);
     try {
-      await api.put(`/users/roles/${activeRoleForPerms.id}/permissions`, {
-        permission_ids: selectedPermissionIds
-      });
-      toast.success('Policy applied successfully', { id: toastId });
-      setIsPermissionModalOpen(false);
-      fetchData();
+      // Create an array of API promises for every role that was changed
+      const updatePromises = Array.from(dirtyRoles).map(roleId =>
+        api.put(`/users/roles/${roleId}/permissions`, {
+          permission_ids: matrixState[roleId]
+        })
+      );
+
+      await Promise.all(updatePromises);
+      toast.success('Permission Matrix updated successfully!', { id: toastId });
+      setDirtyRoles(new Set()); // Reset dirty tracker
+      fetchData(); // Refresh to confirm backend sync
     } catch (err) {
-      toast.error(`Error applying policy: ${err.response?.data?.detail || err.message}`, { id: toastId });
+      toast.error(`Error saving matrix: ${err.response?.data?.detail || err.message}`, { id: toastId });
     }
   };
 
@@ -249,52 +264,9 @@ export default function UserMatrix() {
             </button>
           ) : (
             <button className="btn btn-dark shadow-sm rounded-pill px-4 fw-semibold" onClick={() => setIsRoleModalOpen(true)}>
-              <i className="fa-solid fa-shield-virus me-2"></i> Create Policy Role
+              <i className="fa-solid fa-shield-virus me-2"></i> Create New Role
             </button>
           )}
-        </div>
-      </div>
-
-      {/* METRIC CARDS */}
-      <div className="row g-4 mb-4">
-        <div className="col-md-4">
-          <div className="card border-0 shadow-sm rounded-4 h-100 overflow-hidden bg-white">
-            <div className="card-body d-flex align-items-center p-4">
-              <div className="bg-primary bg-opacity-10 text-primary p-3 rounded-circle me-4 d-flex align-items-center justify-content-center" style={{ width: '60px', height: '60px' }}>
-                <i className="fa-solid fa-users fs-3"></i>
-              </div>
-              <div>
-                <h6 className="text-muted text-uppercase fw-bold mb-1" style={{ fontSize: '0.8rem', letterSpacing: '1px' }}>Total Accounts</h6>
-                <h2 className="fw-bolder mb-0 text-dark">{users.length}</h2>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div className="col-md-4">
-          <div className="card border-0 shadow-sm rounded-4 h-100 overflow-hidden bg-white">
-            <div className="card-body d-flex align-items-center p-4">
-              <div className="bg-success bg-opacity-10 text-success p-3 rounded-circle me-4 d-flex align-items-center justify-content-center" style={{ width: '60px', height: '60px' }}>
-                <i className="fa-solid fa-user-shield fs-3"></i>
-              </div>
-              <div>
-                <h6 className="text-muted text-uppercase fw-bold mb-1" style={{ fontSize: '0.8rem', letterSpacing: '1px' }}>Security Roles</h6>
-                <h2 className="fw-bolder mb-0 text-dark">{roles.length}</h2>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div className="col-md-4">
-          <div className="card border-0 shadow-sm rounded-4 h-100 overflow-hidden bg-white">
-            <div className="card-body d-flex align-items-center p-4">
-              <div className="bg-warning bg-opacity-10 text-warning p-3 rounded-circle me-4 d-flex align-items-center justify-content-center" style={{ width: '60px', height: '60px' }}>
-                <i className="fa-solid fa-key fs-3"></i>
-              </div>
-              <div>
-                <h6 className="text-muted text-uppercase fw-bold mb-1" style={{ fontSize: '0.8rem', letterSpacing: '1px' }}>System Permissions</h6>
-                <h2 className="fw-bolder mb-0 text-dark">{permissions.length}</h2>
-              </div>
-            </div>
-          </div>
         </div>
       </div>
 
@@ -305,12 +277,12 @@ export default function UserMatrix() {
             <button className={`nav-link rounded-pill flex-grow-1 px-4 ${activeTab === 'users' ? 'active shadow-sm fw-bold bg-primary text-white' : 'text-dark fw-semibold'}`} onClick={() => setActiveTab('users')}>
               <i className="fa-solid fa-id-card-clip me-2"></i> Active Directory
             </button>
-            <button className={`nav-link rounded-pill flex-grow-1 px-4 ${activeTab === 'roles' ? 'active shadow-sm fw-bold bg-dark text-white' : 'text-dark fw-semibold'}`} onClick={() => setActiveTab('roles')}>
-              <i className="fa-solid fa-shield-halved me-2"></i> Roles & Policies
+            <button className={`nav-link rounded-pill flex-grow-1 px-4 ${activeTab === 'matrix' ? 'active shadow-sm fw-bold bg-dark text-white' : 'text-dark fw-semibold'}`} onClick={() => setActiveTab('matrix')}>
+              <i className="fa-solid fa-table-cells me-2"></i> Permission Matrix
             </button>
           </div>
 
-          {activeTab === 'users' && (
+          {activeTab === 'users' ? (
             <div className="input-group shadow-sm rounded-pill overflow-hidden w-auto" style={{ minWidth: '300px' }}>
               <span className="input-group-text bg-light border-0 ps-4 text-primary"><i className="fa-solid fa-magnifying-glass"></i></span>
               <input
@@ -321,6 +293,15 @@ export default function UserMatrix() {
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
             </div>
+          ) : (
+             <button
+                className={`btn rounded-pill px-4 fw-bold shadow-sm ${dirtyRoles.size > 0 ? 'btn-success text-white blink-animation' : 'btn-light text-muted'}`}
+                onClick={saveMatrixChanges}
+                disabled={dirtyRoles.size === 0}
+             >
+                <i className="fa-solid fa-floppy-disk me-2"></i>
+                {dirtyRoles.size > 0 ? `Save ${dirtyRoles.size} Edited Roles` : 'Matrix Saved'}
+             </button>
           )}
         </div>
       </div>
@@ -403,55 +384,51 @@ export default function UserMatrix() {
           </div>
         )}
 
-        {/* VIEW: ROLES & PERMISSIONS */}
-        {activeTab === 'roles' && (
+        {/* --- TRUE USER MATRIX VIEW --- */}
+        {activeTab === 'matrix' && (
           <div className="table-responsive">
-            <table className="table table-hover align-middle mb-0">
+            <table className="table table-bordered table-hover align-middle mb-0 text-center">
               <thead className="bg-dark text-white">
                 <tr>
-                  <th className="px-4 py-3 text-uppercase fw-bold border-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>Policy Tag</th>
-                  <th className="py-3 text-uppercase fw-bold border-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>Security Role</th>
-                  <th className="py-3 text-uppercase fw-bold border-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>Granted Capabilities</th>
-                  <th className="text-end px-4 py-3 text-uppercase fw-bold border-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>Enforcement</th>
+                  <th className="text-start px-4 py-3 border-secondary" style={{ width: '25%' }}>System Capabilities</th>
+                  {roles.map(r => (
+                    <th key={r.id} className="py-3 border-secondary text-uppercase" style={{ letterSpacing: '1px', fontSize: '0.85rem' }}>
+                      <div className="d-flex flex-column align-items-center">
+                         <i className="fa-solid fa-user-shield text-warning mb-1 fs-5"></i>
+                         {r.name}
+                      </div>
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan="4" className="text-center py-5"><div className="spinner-border text-primary"></div></td></tr>
-                ) : roles.length === 0 ? (
-                  <tr>
-                    <td colSpan="4" className="text-center py-5 text-muted">
-                      <i className="fa-solid fa-shield-slash fs-1 opacity-25 mb-3 d-block"></i>
-                      <h5 className="fw-bold">No Roles Configured</h5>
+                  <tr><td colSpan={roles.length + 1} className="text-center py-5"><div className="spinner-border text-primary"></div></td></tr>
+                ) : permissions.length === 0 ? (
+                  <tr><td colSpan={roles.length + 1} className="text-center py-5 text-muted">No permissions found in the system.</td></tr>
+                ) : permissions.map(perm => (
+                  <tr key={perm.id}>
+                    <td className="text-start px-4 py-3 bg-light border-end">
+                      <div className="fw-bolder text-dark" style={{ fontSize: '0.9rem' }}>{perm.name || perm.codename}</div>
+                      {perm.description && <div className="text-muted small mt-1">{perm.description}</div>}
                     </td>
-                  </tr>
-                ) : roles.map(role => (
-                  <tr key={role.id}>
-                    <td className="px-4">
-                      <code className="bg-dark bg-opacity-10 text-dark px-2 py-1 rounded fw-bold border">POL-{role.id}</code>
-                    </td>
-                    <td>
-                      <div className="d-flex align-items-center">
-                        <div className="bg-warning bg-opacity-10 text-warning rounded-circle d-flex justify-content-center align-items-center me-3" style={{ width: '40px', height: '40px' }}>
-                          <i className="fa-solid fa-id-badge fs-5"></i>
-                        </div>
-                        <div>
-                          <div className="fw-bolder text-dark fs-6 text-uppercase">{role.name}</div>
-                          <div className="small text-muted text-truncate" style={{ maxWidth: '250px' }}>{role.description || 'No description provided.'}</div>
-                        </div>
-                      </div>
-                    </td>
-                    <td>
-                      <span className="badge bg-info bg-opacity-10 text-info border border-info border-opacity-50 rounded-pill px-3 py-2 fw-bold">
-                        <i className="fa-solid fa-unlock-keyhole me-2"></i>
-                        {role.permissions ? role.permissions.length : 0} Permissions
-                      </span>
-                    </td>
-                    <td className="text-end px-4">
-                      <button className="btn btn-dark btn-sm rounded-pill px-4 fw-semibold shadow-sm border-0 bg-gradient" onClick={() => openPermissionModal(role)}>
-                        <i className="fa-solid fa-sliders me-2"></i> Configure Matrix
-                      </button>
-                    </td>
+                    {roles.map(role => {
+                       const hasPermission = matrixState[role.id]?.includes(perm.id) || false;
+                       return (
+                         <td key={`${role.id}-${perm.id}`}
+                             className={`cursor-pointer transition-all ${hasPermission ? 'bg-success bg-opacity-10' : ''}`}
+                             onClick={() => toggleMatrixPermission(role.id, perm.id)}
+                         >
+                           <input
+                             type="checkbox"
+                             className="form-check-input fs-4 m-0 shadow-sm border-secondary border-opacity-25 cursor-pointer"
+                             checked={hasPermission}
+                             onChange={() => toggleMatrixPermission(role.id, perm.id)}
+                             onClick={(e) => e.stopPropagation()} // Prevent double firing from td click
+                           />
+                         </td>
+                       );
+                    })}
                   </tr>
                 ))}
               </tbody>
@@ -516,7 +493,7 @@ export default function UserMatrix() {
                       </div>
                     </div>
 
-                    {/* NEW: GEOGRAPHICAL HIERARCHY SCOPING */}
+                    {/* GEOGRAPHICAL HIERARCHY SCOPING */}
                     <div className="col-12 mt-4 p-3 bg-white rounded-4 border shadow-sm">
                        <label className="form-label fw-bold text-uppercase text-primary mb-2">
                          <i className="fa-solid fa-map-location-dot me-2"></i> Geographical Hierarchy Scoping <span className="text-muted small text-transform-none fw-normal">(Optional)</span>
@@ -629,70 +606,17 @@ export default function UserMatrix() {
         </div>
       )}
 
-      {/* --- MODAL: MODIFY PERMISSIONS --- */}
-      {isPermissionModalOpen && activeRoleForPerms && (
-        <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(15, 23, 42, 0.7)', backdropFilter: 'blur(5px)' }}>
-          <div className="modal-dialog modal-dialog-centered modal-dialog-scrollable">
-            <div className="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
-              <div className="modal-header bg-dark bg-gradient text-white border-0 p-4">
-                <div className="d-flex align-items-center">
-                  <div className="bg-warning bg-opacity-25 text-warning rounded-circle d-flex justify-content-center align-items-center me-3 border border-warning border-opacity-50" style={{ width: '45px', height: '45px' }}>
-                    <i className="fa-solid fa-network-wired fs-5"></i>
-                  </div>
-                  <div>
-                    <h5 className="modal-title fw-bold m-0">Access Matrix</h5>
-                    <div className="small text-white-50 font-monospace">TARGET: {activeRoleForPerms.name.toUpperCase()}</div>
-                  </div>
-                </div>
-                <button type="button" className="btn-close btn-close-white opacity-75" onClick={() => setIsPermissionModalOpen(false)}></button>
-              </div>
-
-              <div className="modal-body p-0 bg-light">
-                <div className="p-3 bg-warning bg-opacity-10 border-bottom border-warning border-opacity-25 text-dark small fw-semibold d-flex align-items-center">
-                  <i className="fa-solid fa-triangle-exclamation text-warning fs-5 me-3"></i>
-                  Warning: Modifying these permissions will instantly alter access for all users assigned to this role.
-                </div>
-
-                <div className="list-group list-group-flush">
-                  {permissions.length === 0 ? (
-                    <div className="p-5 text-center text-muted">
-                      <i className="fa-solid fa-server fs-1 opacity-25 mb-3 d-block"></i>
-                      No system permissions registered in the API.
-                    </div>
-                  ) : permissions.map(perm => (
-                    <label key={perm.id} className="list-group-item d-flex justify-content-between align-items-center p-3 cursor-pointer hover-bg-light border-0 border-bottom">
-                      <div className="d-flex align-items-center">
-                        <div className="me-3 text-muted opacity-50"><i className="fa-solid fa-key"></i></div>
-                        <div>
-                          <div className="fw-bolder text-dark">{perm.name || perm.codename}</div>
-                          <small className="text-muted">{perm.description || `Capability Module ID: ${perm.id}`}</small>
-                        </div>
-                      </div>
-                      <div className="form-check form-switch fs-3 m-0">
-                        <input
-                          className="form-check-input shadow-sm border-secondary border-opacity-25"
-                          type="checkbox"
-                          checked={selectedPermissionIds.includes(perm.id)}
-                          onChange={() => togglePermission(perm.id)}
-                          style={{ cursor: 'pointer' }}
-                        />
-                      </div>
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              <div className="modal-footer border-0 p-4 bg-white shadow-sm" style={{ zIndex: 10 }}>
-                <button type="button" className="btn btn-light fw-semibold px-4 rounded-pill" onClick={() => setIsPermissionModalOpen(false)}>Abort</button>
-                <button type="button" className="btn btn-dark fw-bold px-5 rounded-pill shadow-sm bg-gradient" onClick={handlePermissionsSubmit}>
-                  <i className="fa-solid fa-lock me-2"></i> Enforce Policy
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
+      {/* Global Style for Blink Animation */}
+      <style>{`
+        @keyframes pulse {
+          0% { box-shadow: 0 0 0 0 rgba(25, 135, 84, 0.7); }
+          70% { box-shadow: 0 0 0 10px rgba(25, 135, 84, 0); }
+          100% { box-shadow: 0 0 0 0 rgba(25, 135, 84, 0); }
+        }
+        .blink-animation {
+          animation: pulse 2s infinite;
+        }
+      `}</style>
     </div>
   );
 }
