@@ -11,10 +11,26 @@ export default function MainLayout() {
     return localStorage.getItem('theme') === 'dark';
   });
 
+  // --- LANGUAGE SELECTION STATE ---
+  const [currentLang, setCurrentLang] = useState(() => {
+    return localStorage.getItem('app-language') || 'en';
+  });
+
+  const languages = [
+    { code: 'en', name: 'English', label: 'English' },
+    { code: 'hi', name: 'हिन्दी', label: 'Hindi' },
+    { code: 'bn', name: 'বাংলা', label: 'Bengali' },
+    { code: 'te', name: 'తెలుగు', label: 'Telugu' },
+    { code: 'mr', name: 'मराठी', label: 'Marathi' },
+    { code: 'ta', name: 'தமிழ்', label: 'Tamil' },
+    { code: 'gu', name: 'ગુજરાતી', label: 'Gujarati' },
+    { code: 'kn', name: 'ಕನ್ನಡ', label: 'Kannada' }
+  ];
+
   useEffect(() => {
     if (isDarkMode) {
       document.body.classList.add('dark-theme');
-      document.documentElement.setAttribute('data-bs-theme', 'dark'); // Forces Bootstrap 5 into Dark Mode
+      document.documentElement.setAttribute('data-bs-theme', 'dark');
       localStorage.setItem('theme', 'dark');
     } else {
       document.body.classList.remove('dark-theme');
@@ -25,6 +41,12 @@ export default function MainLayout() {
 
   const toggleTheme = () => setIsDarkMode(!isDarkMode);
 
+  const handleLanguageChange = (langCode) => {
+    setCurrentLang(langCode);
+    localStorage.setItem('app-language', langCode);
+    // Note: If you implement i18next later, add i18n.changeLanguage(langCode) here
+  };
+
   const handleLogout = () => {
     logout();
     navigate('/login');
@@ -32,12 +54,10 @@ export default function MainLayout() {
 
   // --- RBAC Logic ---
   const userRole = user?.role || "Admin";
-
   const canViewGeo = userRole === "Admin";
   const canViewProducts = userRole === "Admin";
   const canViewPartners = ["Admin", "ZSM", "RSM"].includes(userRole);
   const canViewUsers = userRole === "Admin";
-
   const canViewInventory = ["Admin", "ZSM", "SuperStockist", "Distributor", "Retailer"].includes(userRole);
   const canViewFinance = ["Admin"].includes(userRole);
 
@@ -52,7 +72,6 @@ export default function MainLayout() {
       : 'text-secondary hover-bg-light');
 
   return (
-    // FIX: Dynamically applying the background color inline so it never gets stuck on light mode
     <div className="d-flex theme-transition" style={{ minHeight: '100vh', backgroundColor: isDarkMode ? '#0B1120' : '#f4f7f8' }}>
 
       {/* --- SIDEBAR --- */}
@@ -147,7 +166,39 @@ export default function MainLayout() {
         <div className="top-navbar bg-white border-bottom shadow-sm px-4 py-3 d-flex justify-content-between align-items-center flex-shrink-0" style={{ zIndex: 5 }}>
           <h5 className="m-0 fw-bolder text-dark" style={{ letterSpacing: '-0.5px' }}>Enterprise Gateway</h5>
 
-          <div className="d-flex align-items-center gap-3">
+          <div className="d-flex align-items-center gap-2">
+
+             {/* --- LANGUAGE SELECTION DROPDOWN --- */}
+             <div className="dropdown">
+               <button
+                 className="btn btn-light dropdown-toggle d-flex align-items-center shadow-sm border rounded-pill px-3"
+                 type="button"
+                 id="languageDropdown"
+                 data-bs-toggle="dropdown"
+                 aria-expanded="false"
+                 style={{ height: '40px' }}
+               >
+                 <i className="fa-solid fa-language fs-5 me-2 text-primary"></i>
+                 <span className="fw-semibold small d-none d-lg-inline">
+                   {languages.find(l => l.code === currentLang)?.name}
+                 </span>
+               </button>
+               <ul className="dropdown-menu dropdown-menu-end shadow border-0 mt-2" aria-labelledby="languageDropdown">
+                 <li className="dropdown-header text-uppercase small fw-bold">Select Language</li>
+                 {languages.map((lang) => (
+                   <li key={lang.code}>
+                     <button
+                       className={`dropdown-item d-flex justify-content-between align-items-center py-2 ${currentLang === lang.code ? 'active bg-primary text-white' : ''}`}
+                       onClick={() => handleLanguageChange(lang.code)}
+                     >
+                       <span>{lang.name} <small className="opacity-75 ms-1">({lang.label})</small></span>
+                       {currentLang === lang.code && <i className="fa-solid fa-check ms-2 fs-xs"></i>}
+                     </button>
+                   </li>
+                 ))}
+               </ul>
+             </div>
+
              {/* --- THEME TOGGLE BUTTON --- */}
              <button
                onClick={toggleTheme}
@@ -158,13 +209,13 @@ export default function MainLayout() {
                 <i className={`fa-solid ${isDarkMode ? 'fa-sun text-warning fs-5' : 'fa-moon text-secondary fs-5'}`}></i>
              </button>
 
-             <span className="badge bg-success bg-opacity-10 text-success border border-success border-opacity-25 px-3 py-2 rounded-pill shadow-sm">
+             <span className="badge bg-success bg-opacity-10 text-success border border-success border-opacity-25 px-3 py-2 rounded-pill shadow-sm d-none d-sm-inline-block">
                <i className="fa-solid fa-circle-check me-1 align-middle"></i> Core API Connected
              </span>
           </div>
         </div>
 
-        {/* THIS IS WHERE THE PAGES RENDER */}
+        {/* RENDER PAGES HERE */}
         <div className="flex-grow-1 overflow-auto custom-scrollbar">
           <Outlet />
         </div>

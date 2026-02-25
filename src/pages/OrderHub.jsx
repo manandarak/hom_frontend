@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useContext } from 'react';
 import api from '../api';
 import toast, { Toaster } from 'react-hot-toast';
-import { AuthContext } from '../context/AuthContext'; // <-- Imported AuthContext
+import { AuthContext } from '../context/AuthContext';
 
 export default function OrderHub() {
-  const { user } = useContext(AuthContext); // <-- Grab the logged-in user
+  const { user } = useContext(AuthContext);
 
-  // Initialize active tab based on role (Retailers shouldn't default to primary)
   const defaultTab = user?.role === 'Retailer' ? 'tertiary' : 'primary';
   const [activeTab, setActiveTab] = useState(defaultTab);
   const [loading, setLoading] = useState(false);
@@ -18,56 +17,46 @@ export default function OrderHub() {
     return () => window.removeEventListener('click', handleClickOutside);
   }, []);
 
-  // --- HYDRATED MASTER DATA ---
-  const [masterData, setMasterData] = useState({
-    products: [], ss: [], distributors: [], retailers: [], consumers: []
-  });
+  const [masterData, setMasterData] = useState({ products: [], ss: [], distributors: [], retailers: [], consumers: [] });
+  const [geoMaster, setGeoMaster] = useState({ zones: [], states: [], regions: [], areas: [], territories: [] });
+  const [geoFilter, setGeoFilter] = useState({ zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: '' });
+  const [consumerGeoMaster, setConsumerGeoMaster] = useState({ states: [], regions: [], areas: [], territories: [] });
+  const [consumerGeoFilter, setConsumerGeoFilter] = useState({ zone_id: '', state_id: '', region_id: '', area_id: '' });
 
-  // --- CASCADING GEO MASTER DATA (For Order Modal) ---
-  const [geoMaster, setGeoMaster] = useState({
-    zones: [], states: [], regions: [], areas: [], territories: []
-  });
-
-  const [geoFilter, setGeoFilter] = useState({
-    zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: ''
-  });
-
-  // --- CASCADING GEO MASTER DATA (For Consumer Modal) ---
-  const [consumerGeoMaster, setConsumerGeoMaster] = useState({
-    states: [], regions: [], areas: [], territories: []
-  });
-
-  const [consumerGeoFilter, setConsumerGeoFilter] = useState({
-    zone_id: '', state_id: '', region_id: '', area_id: ''
-  });
-
-  // --- CORE DATA STATES ---
   const [orders, setOrders] = useState([]);
   const [consumers, setConsumers] = useState([]);
 
-  // --- MODAL STATES ---
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false);
   const [isConsumerModalOpen, setIsConsumerModalOpen] = useState(false);
   const [isDispatchModalOpen, setIsDispatchModalOpen] = useState(false);
   const [isShipmentModalOpen, setIsShipmentModalOpen] = useState(false);
 
+  const [approveConfirmId, setApproveConfirmId] = useState(null);
+
   const [shipmentDetails, setShipmentDetails] = useState(null);
   const [editingConsumerId, setEditingConsumerId] = useState(null);
   const [dispatchingOrderId, setDispatchingOrderId] = useState(null);
 
-  // --- FORM STATES ---
   const [orderForm, setOrderForm] = useState({ from_id: '', to_id: '', product_id: '', quantity: '', batch_number: '' });
   const [consumerForm, setConsumerForm] = useState({ name: '', phone: '', address: '', territory_id: '' });
-  const [dispatchForm, setDispatchForm] = useState({
-    transporter_name: '', vehicle_number: '', lr_number: '', driver_phone: '', estimated_arrival_date: ''
-  });
+  const [dispatchForm, setDispatchForm] = useState({ transporter_name: '', vehicle_number: '', lr_number: '', driver_phone: '', estimated_arrival_date: '' });
 
   const [primaryRouting, setPrimaryRouting] = useState('FACTORY_TO_SS');
   const [availableBatches, setAvailableBatches] = useState([]);
 
-  // --- RBAC PERMISSION HELPERS ---
-  const isAdminOrInternal = ['Admin', 'ZSM', 'RSM', 'ASM', 'SO'].includes(user?.role);
+  // --- ERROR DECODER HELPER ---
+  const formatError = (err) => {
+    let errorMsg = err.response?.data?.detail || err.message;
+    if (Array.isArray(errorMsg)) {
+      return errorMsg.map(d => `${d.loc[d.loc.length - 1]}: ${d.msg}`).join(' | ');
+    } else if (typeof errorMsg === 'object') {
+      return JSON.stringify(errorMsg);
+    }
+    return errorMsg;
+  };
 
+  // --- RBAC PERMISSIONS ---
+  const isAdminOrInternal = ['Admin', 'ZSM', 'RSM', 'ASM', 'SO'].includes(user?.role);
   const canViewPrimary = isAdminOrInternal || ['SuperStockist', 'Distributor'].includes(user?.role);
   const canViewSecondary = isAdminOrInternal || ['Distributor', 'Retailer'].includes(user?.role);
   const canViewTertiary = isAdminOrInternal || ['Retailer'].includes(user?.role);
@@ -77,14 +66,8 @@ export default function OrderHub() {
   const canPlaceTertiary = isAdminOrInternal || user?.role === 'Retailer' || user?.permissions?.includes('create_tertiary_order');
   const canManageConsumers = isAdminOrInternal || user?.role === 'Retailer';
 
-  // Determine if user can place order in CURRENT active tab
-  const canPlaceOrderInCurrentTab =
-    (activeTab === 'primary' && canPlacePrimary) ||
-    (activeTab === 'secondary' && canPlaceSecondary) ||
-    (activeTab === 'tertiary' && canPlaceTertiary);
+  const canPlaceOrderInCurrentTab = (activeTab === 'primary' && canPlacePrimary) || (activeTab === 'secondary' && canPlaceSecondary) || (activeTab === 'tertiary' && canPlaceTertiary);
 
-
-  // --- 1. HYDRATION ON MOUNT ---
   useEffect(() => {
     const fetchMasterData = async () => {
       try {
@@ -106,13 +89,11 @@ export default function OrderHub() {
         });
 
         setGeoMaster(prev => ({ ...prev, zones: Array.isArray(zn.data) ? zn.data : zn.data?.items || [] }));
-
       } catch (err) { console.error("Hydration error", err); }
     };
     fetchMasterData();
   }, []);
 
-  // --- 2. FETCH LIST DATA BASED ON TAB ---
   const fetchData = async () => {
     setLoading(true);
     try {
@@ -121,10 +102,8 @@ export default function OrderHub() {
         setConsumers(Array.isArray(res.data) ? res.data : res.data.items || []);
         setMasterData(prev => ({ ...prev, consumers: Array.isArray(res.data) ? res.data : res.data.items || [] }));
       } else {
-        const endpoint = activeTab === 'primary' ? '/primary-orders/'
-                       : activeTab === 'secondary' ? '/secondary-sales/'
-                       : '/tertiary-sales/';
-        const res = await api.get(endpoint).catch(() => ({ data: [] }));
+        const endpoint = activeTab === 'primary' ? '/primary-orders/' : activeTab === 'secondary' ? '/secondary-sales/' : '/tertiary-sales/';
+        const res = await api.get(endpoint);
         setOrders(Array.isArray(res.data) ? res.data : res.data.items || res.data.orders || []);
       }
     } catch (err) {
@@ -134,7 +113,6 @@ export default function OrderHub() {
 
   useEffect(() => { fetchData(); }, [activeTab]);
 
-  // --- 3. DYNAMIC BATCH FETCHING LOGIC ---
   useEffect(() => {
     const fetchAvailableBatches = async () => {
       if (!orderForm.product_id) return setAvailableBatches([]);
@@ -156,7 +134,6 @@ export default function OrderHub() {
     fetchAvailableBatches();
   }, [orderForm.product_id, orderForm.from_id, activeTab, primaryRouting]);
 
-  // --- 4. TARGET IDENTIFICATION ---
   const getTargetTier = () => {
     if (activeTab === 'primary' && primaryRouting === 'FACTORY_TO_SS') return 'ss';
     if (activeTab === 'primary' && (primaryRouting === 'FACTORY_TO_DB' || primaryRouting === 'SS_TO_DB')) return 'distributor';
@@ -165,9 +142,8 @@ export default function OrderHub() {
     return null;
   };
 
-  // --- 5. HIERARCHICAL CASCADING API FETCHERS ---
   const handleGeoChange = async (field, value) => {
-    setOrderForm(prev => ({ ...prev, to_id: '' })); // Reset destination
+    setOrderForm(prev => ({ ...prev, to_id: '' }));
 
     if (field === 'zone_id') {
       setGeoFilter({ zone_id: value, state_id: '', region_id: '', area_id: '', territory_id: '' });
@@ -245,10 +221,8 @@ export default function OrderHub() {
     }
   };
 
-  // --- 6. EXACT MODEL-BASED GEOFENCING ---
   const getFilteredDestinations = () => {
     const targetTier = getTargetTier();
-
     if (!orderForm.from_id && !(activeTab === 'primary' && primaryRouting.startsWith('FACTORY'))) return [];
 
     if (targetTier === 'ss') {
@@ -271,13 +245,11 @@ export default function OrderHub() {
         if (geoFilter.territory_id) list = list.filter(c => c.territory_id === parseInt(geoFilter.territory_id));
         return list;
     }
-
     return [];
   };
 
   const filteredDestinations = getFilteredDestinations();
 
-  // --- HELPERS: ID TRANSLATORS ---
   const getProductName = (id) => {
     const p = masterData.products.find(x => x.id === parseInt(id));
     return p ? p.name || p.product_name : `PRD-${id}`;
@@ -296,30 +268,23 @@ export default function OrderHub() {
     return p.name || p.firm_name || p.shop_name;
   };
 
-  // --- MUTATIONS: CONSUMERS ---
   const handleConsumerSubmit = async (e) => {
     e.preventDefault();
     const toastId = toast.loading(editingConsumerId ? 'Updating consumer...' : 'Registering consumer...');
     try {
-      const payload = {
-        name: consumerForm.name,
-        mobile_number: consumerForm.phone,
-        address: consumerForm.address,
-        territory_id: parseInt(consumerForm.territory_id),
-        type: "Consumer"
-      };
+      const payload = { name: consumerForm.name, mobile_number: consumerForm.phone, address: consumerForm.address, territory_id: parseInt(consumerForm.territory_id), type: "Consumer" };
       if (editingConsumerId) {
-        await api.patch(`/tertiary-sales/consumers/${editingConsumerId}`, consumerForm);
+        await api.patch(`/tertiary-sales/consumers/${editingConsumerId}`, payload);
         toast.success('Consumer profile updated', { id: toastId });
       } else {
-        await api.post('/tertiary-sales/consumers', consumerForm);
+        await api.post('/tertiary-sales/consumers', payload);
         toast.success('Consumer registered successfully', { id: toastId });
       }
       setIsConsumerModalOpen(false);
       setConsumerForm({ name: '', phone: '', address: '', territory_id: '' });
       setConsumerGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '' });
       fetchData();
-    } catch (err) { toast.error(`Error: ${err.response?.data?.detail || err.message}`, { id: toastId }); }
+    } catch (err) { toast.error(`Error: ${formatError(err)}`, { id: toastId }); }
   };
 
   const handleDeleteConsumer = async (id, name) => {
@@ -329,10 +294,9 @@ export default function OrderHub() {
       await api.delete(`/tertiary-sales/consumers/${id}`);
       toast.success('Consumer removed', { id: toastId });
       fetchData();
-    } catch (err) { toast.error('Failed to remove consumer', { id: toastId }); }
+    } catch (err) { toast.error(`Failed to remove consumer: ${formatError(err)}`, { id: toastId }); }
   };
 
-  // --- MUTATIONS: SMART DYNAMIC ORDERS ---
   const handleOrderSubmit = async (e) => {
     e.preventDefault();
     const toastId = toast.loading(`Routing ${activeTab} order...`);
@@ -380,22 +344,23 @@ export default function OrderHub() {
       setGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: '' });
       fetchData();
     } catch (err) {
-      let errorMsg = err.response?.data?.detail || err.message;
-      if (Array.isArray(errorMsg)) {
-        errorMsg = errorMsg.map(d => `${d.loc[d.loc.length - 1]}: ${d.msg}`).join(' | ');
-      }
-      toast.error(`Validation Error: ${errorMsg}`, { id: toastId });
+      toast.error(`Validation Error: ${formatError(err)}`, { id: toastId });
     }
   };
 
-  // --- MUTATIONS: DISPATCH LOGISTICS ---
   const handleDispatchSubmit = async (e) => {
     e.preventDefault();
     const toastId = toast.loading('Dispatching order to logistics...');
 
     try {
       const baseRoute = activeTab === 'primary' ? 'primary-orders' : activeTab === 'secondary' ? 'secondary-sales' : 'tertiary-sales';
-      const payload = { ...dispatchForm };
+
+      // SAFETY FIX: We send BOTH spellings so the backend schema is satisfied no matter what
+      const payload = {
+          ...dispatchForm,
+          transport_name: dispatchForm.transporter_name
+      };
+
       if (!payload.driver_phone) delete payload.driver_phone;
 
       await api.post(`/${baseRoute}/${dispatchingOrderId}/dispatch`, payload);
@@ -403,13 +368,19 @@ export default function OrderHub() {
       setIsDispatchModalOpen(false);
       fetchData();
     } catch (err) {
-      toast.error(`Dispatch failed: ${err.response?.data?.detail || err.message}`, { id: toastId });
+      toast.error(`Dispatch failed: ${formatError(err)}`, { id: toastId });
     }
   };
 
-  // --- MUTATIONS: SIMPLE WORKFLOW ACTIONS ---
-  const handleOrderStatus = async (action, orderId) => {
+  // --- UPDATED ACTION WORKFLOW ---
+  const handleOrderStatus = async (action, orderId, isConfirmed = false) => {
     setOpenDropdownId(null);
+
+    if (action === 'approve' && activeTab === 'secondary' && !isConfirmed) {
+      setApproveConfirmId(orderId);
+      return;
+    }
+
     const toastId = toast.loading(`Processing workflow: ${action}...`);
     try {
       const baseRoute = activeTab === 'primary' ? 'primary-orders' : activeTab === 'secondary' ? 'secondary-sales' : 'tertiary-sales';
@@ -421,7 +392,7 @@ export default function OrderHub() {
       toast.success(`Order ${action} executed!`, { id: toastId });
       fetchData();
     } catch (err) {
-      toast.error(`Action failed: ${err.response?.data?.detail || err.message}`, { id: toastId });
+      toast.error(`Action failed: ${formatError(err)}`, { id: toastId });
     }
   };
 
@@ -438,7 +409,6 @@ export default function OrderHub() {
           <p className="text-muted m-0 mt-1">Manage Primary, Secondary, and Tertiary distribution funnels.</p>
         </div>
         <div>
-          {/* DYNAMIC NEW ORDER / REGISTRATION BUTTONS */}
           {activeTab === 'consumers' && canManageConsumers ? (
             <button className="btn btn-dark shadow-sm rounded-pill px-4 fw-semibold" onClick={() => {
               setEditingConsumerId(null);
@@ -460,7 +430,7 @@ export default function OrderHub() {
         </div>
       </div>
 
-      {/* TIER NAVIGATION (RBAC FILTERED) */}
+      {/* TIER NAVIGATION */}
       <div className="card border-0 shadow-sm rounded-4 mb-4 bg-white">
         <div className="card-body p-2 d-flex flex-column flex-md-row justify-content-between align-items-center gap-3">
           <div className="nav nav-pills p-1 bg-light rounded-pill w-100 d-flex text-center shadow-sm border border-light">
@@ -558,52 +528,66 @@ export default function OrderHub() {
                 : orders.length === 0 ? <tr><td colSpan="5" className="text-center py-5 text-muted fw-bold"><i className="fa-solid fa-receipt fs-1 mb-3 opacity-25 d-block"></i> No {activeTab} pipeline data found.</td></tr>
                 : orders.map(o => {
 
-                  const destId = o.to_entity_id || o.ss_id || o.retailer_id || o.consumer_id;
+                  // --- 1. EXACT DESTINATION IDENTIFICATION ---
+                  let destId = null;
                   let targetTier = 'consumer';
+
                   if (activeTab === 'primary') {
+                    destId = o.to_entity_id || o.ss_id;
                     targetTier = (o.type === 'FACTORY_TO_DB' || o.type === 'SS_TO_DB') ? 'distributor' : 'ss';
                   } else if (activeTab === 'secondary') {
+                    destId = o.retailer_id;
                     targetTier = 'retailer';
+                  } else if (activeTab === 'tertiary') {
+                    destId = o.end_consumer_id; // Maps correctly from backend
+                    targetTier = 'consumer';
                   }
 
-                  const destName = destId
-                    ? getPartnerName(targetTier, destId)
-                    : 'Destination Pending...';
+                  const destName = destId ? getPartnerName(targetTier, destId) : 'Destination Pending...';
 
-                  // Origin Naming logic
+                  // --- 2. EXACT ORIGIN IDENTIFICATION ---
                   let originName = '🏭 Main Factory';
                   if (activeTab === 'primary' && o.type === 'SS_TO_DB') {
                       originName = getPartnerName('ss', o.from_entity_id);
                   } else if (activeTab === 'secondary') {
-                      originName = getPartnerName('distributor', o.from_entity_id || o.distributor_id);
+                      originName = getPartnerName('distributor', o.distributor_id);
                   } else if (activeTab === 'tertiary') {
-                      originName = getPartnerName('retailer', o.from_entity_id || o.retailer_id);
+                      originName = getPartnerName('retailer', o.fulfilled_by_retailer_id); // Maps correctly from backend
                   }
 
                   const itemInfo = o.items && o.items.length > 0 ? o.items[0] : null;
                   const prodId = itemInfo ? itemInfo.product_id : o.product_id;
-                  const qty = itemInfo ? (itemInfo.quantity_cases || itemInfo.quantity) : o.quantity;
+
+                  const qty = itemInfo ? (itemInfo.quantity_cases || itemInfo.quantity_units || itemInfo.quantity) : (o.quantity_cases || o.quantity_units || o.quantity);
                   const batch = itemInfo ? itemInfo.batch_number : o.batch_number;
 
-                  const isDispatched = (o.status === 'DISPATCHED' || o.status === 'Dispatched' || o.status === 'Partially Dispatched');
+                  const displayStatus = o.status || 'LOGGED';
+                  const isDispatched = (displayStatus === 'DISPATCHED' || displayStatus === 'Dispatched');
 
-                  // Role checks for actions
-                  const canDispatch = isAdminOrInternal || (activeTab === 'primary' && user?.role === 'SuperStockist') || (activeTab === 'secondary' && user?.role === 'Distributor');
-                  const canReceive = isAdminOrInternal || (activeTab === 'primary' && ['SuperStockist', 'Distributor'].includes(user?.role)) || (activeTab === 'secondary' && user?.role === 'Retailer');
-                  const canApproveTertiary = isAdminOrInternal || user?.role === 'Retailer';
+                  const canDispatchPrimary = isAdminOrInternal || (activeTab === 'primary' && user?.role === 'SuperStockist');
+                  const canReceivePrimary = isAdminOrInternal || (activeTab === 'primary' && ['SuperStockist', 'Distributor'].includes(user?.role));
+
+                  const canApproveSecondary = isAdminOrInternal || (activeTab === 'secondary' && user?.role === 'Distributor');
+                  const canDispatchSecondary = isAdminOrInternal || (activeTab === 'secondary' && user?.role === 'Distributor');
+                  const canReceiveSecondary = isAdminOrInternal || (activeTab === 'secondary' && user?.role === 'Retailer');
+
+                  const canApproveTertiary = isAdminOrInternal || (activeTab === 'tertiary' && user?.role === 'Retailer');
+
+                  const needsAction =
+                    (displayStatus === 'Pending' || displayStatus === 'PENDING') ||
+                    (displayStatus === 'APPROVED' || displayStatus === 'Approved') ||
+                    isDispatched;
 
                   return (
                   <tr key={o.id}>
                     <td className="px-4">
                       <code className="bg-dark bg-opacity-10 text-dark px-2 py-1 rounded fw-bold border">
-                        {o.order_number || `ORD-${o.id}`}
+                        {o.order_number || o.invoice_number || `ORD-${o.id}`}
                       </code>
                     </td>
                     <td>
                       <div className="d-flex align-items-center bg-light rounded-pill px-2 py-1 d-inline-flex border">
-                        <span className="badge bg-white text-dark border shadow-sm rounded-pill px-3">
-                          {originName}
-                        </span>
+                        <span className="badge bg-white text-dark border shadow-sm rounded-pill px-3">{originName}</span>
                         <i className="fa-solid fa-arrow-right-long text-muted opacity-50 mx-2"></i>
                         <span className={`badge border shadow-sm rounded-pill px-3 ${!destId ? 'bg-secondary bg-opacity-10 text-secondary border-secondary' : activeTab === 'primary' ? 'bg-primary bg-opacity-10 text-primary border-primary' : activeTab === 'secondary' ? 'bg-success bg-opacity-10 text-success border-success' : 'bg-warning bg-opacity-10 text-dark border-warning'}`}>
                           {destName}
@@ -620,24 +604,29 @@ export default function OrderHub() {
                           </div>
                         </>
                       ) : (
-                        <div className="text-muted small fst-italic">
-                          <i className="fa-solid fa-hourglass-half me-1"></i> Awaiting Payload Data...
-                        </div>
+                        <div className="text-muted small fst-italic"><i className="fa-solid fa-hourglass-half me-1"></i> Awaiting Payload Data...</div>
                       )}
                     </td>
                     <td>
                       <span className={`badge rounded-pill px-3 py-2 text-uppercase shadow-sm border ${
-                        o.status === 'Pending' || o.status === 'PENDING' ? 'bg-warning bg-opacity-10 text-warning border-warning border-opacity-50' :
+                        displayStatus === 'Pending' || displayStatus === 'PENDING' ? 'bg-warning bg-opacity-10 text-warning border-warning border-opacity-50' :
+                        displayStatus === 'APPROVED' || displayStatus === 'Approved' ? 'bg-primary bg-opacity-10 text-primary border-primary border-opacity-50' :
                         isDispatched ? 'bg-info bg-opacity-10 text-info border-info border-opacity-50' :
-                        o.status === 'RECEIVED' || o.status === 'Received' || o.status === 'APPROVED' ? 'bg-success bg-opacity-10 text-success border-success border-opacity-50' :
-                        o.status === 'CANCELLED' || o.status === 'Cancelled' ? 'bg-danger bg-opacity-10 text-danger border-danger border-opacity-50' : 'bg-secondary bg-opacity-10 text-secondary border-secondary border-opacity-50'
+                        displayStatus === 'RECEIVED' || displayStatus === 'Received' || displayStatus === 'FULFILLED' ? 'bg-success bg-opacity-10 text-success border-success border-opacity-50' :
+                        displayStatus === 'CANCELLED' || displayStatus === 'Cancelled' ? 'bg-danger bg-opacity-10 text-danger border-danger border-opacity-50' : 'bg-secondary bg-opacity-10 text-secondary border-secondary border-opacity-50'
                       }`}>
-                        <i className={`fa-solid ${o.status === 'Pending' || o.status === 'PENDING' ? 'fa-clock' : isDispatched ? 'fa-truck-fast' : o.status === 'RECEIVED' || o.status === 'Received' || o.status === 'APPROVED' ? 'fa-check-double' : 'fa-ban'} me-1`}></i>
-                        {o.status || 'LOGGED'}
+                        <i className={`fa-solid ${
+                          displayStatus === 'Pending' || displayStatus === 'PENDING' ? 'fa-clock' : 
+                          displayStatus === 'APPROVED' || displayStatus === 'Approved' ? 'fa-thumbs-up' :
+                          isDispatched ? 'fa-truck-fast' : 
+                          displayStatus === 'RECEIVED' || displayStatus === 'Received' || displayStatus === 'FULFILLED' ? 'fa-check-double' : 
+                          'fa-ban'} me-1`}></i>
+                        {displayStatus}
                       </span>
                     </td>
                     <td className="text-end px-4">
-                      {(o.status === 'Pending' || o.status === 'PENDING' || isDispatched) ? (
+
+                      {needsAction ? (
                         <div className="dropdown position-relative">
                           <button
                             className="btn btn-sm btn-dark rounded-pill shadow-sm px-3 fw-bold dropdown-toggle"
@@ -654,8 +643,19 @@ export default function OrderHub() {
                             className={`dropdown-menu dropdown-menu-end shadow-lg border-0 rounded-4 mt-1 p-2 ${openDropdownId === o.id ? 'show' : ''}`}
                             style={{ position: 'absolute', right: 0, top: '100%', zIndex: 1050 }}
                           >
+                            {/* APPROVE ACTION (SECONDARY) */}
+                            {canApproveSecondary && activeTab === 'secondary' && (displayStatus === 'Pending' || displayStatus === 'PENDING') &&
+                              <li>
+                                <button className="dropdown-item rounded-3 text-primary fw-bold py-2 mb-1" onClick={() => handleOrderStatus('approve', o.id)}>
+                                  <div className="bg-primary bg-opacity-10 d-inline-block p-2 rounded-circle me-2"><i className="fa-solid fa-thumbs-up text-primary"></i></div>
+                                  Approve Order
+                                </button>
+                              </li>
+                            }
+
                             {/* DISPATCH ACTION */}
-                            {canDispatch && (activeTab === 'primary' || activeTab === 'secondary') && (o.status === 'Pending' || o.status === 'PENDING') &&
+                            {((canDispatchPrimary && activeTab === 'primary' && (displayStatus === 'Pending' || displayStatus === 'PENDING')) ||
+                              (canDispatchSecondary && activeTab === 'secondary' && (displayStatus === 'APPROVED' || displayStatus === 'Approved'))) &&
                               <li>
                                 <button className="dropdown-item rounded-3 text-info fw-bold py-2 mb-1"
                                   onClick={() => {
@@ -691,22 +691,33 @@ export default function OrderHub() {
                               </li>
                             )}
 
-                            {/* Receive Action */}
-                            {canReceive && (activeTab === 'primary' || activeTab === 'secondary') && isDispatched &&
-                              <li><button className="dropdown-item rounded-3 text-success fw-bold py-2 mb-1" onClick={() => handleOrderStatus('receive', o.id)}><div className="bg-success bg-opacity-10 d-inline-block p-2 rounded-circle me-2"><i className="fa-solid fa-box-open text-success"></i></div> Mark Received</button></li>
+                            {/* RECEIVE ACTION */}
+                            {((canReceivePrimary && activeTab === 'primary' && isDispatched) ||
+                              (canReceiveSecondary && activeTab === 'secondary' && isDispatched)) &&
+                              <li>
+                                <button className="dropdown-item rounded-3 text-success fw-bold py-2 mb-1" onClick={() => handleOrderStatus('receive', o.id)}>
+                                  <div className="bg-success bg-opacity-10 d-inline-block p-2 rounded-circle me-2"><i className="fa-solid fa-box-open text-success"></i></div>
+                                  Mark Received
+                                </button>
+                              </li>
                             }
 
-                            {/* Approve Action */}
-                            {canApproveTertiary && activeTab === 'tertiary' && (o.status === 'Pending' || o.status === 'PENDING') &&
+                            {/* APPROVE ACTION (TERTIARY) */}
+                            {canApproveTertiary && activeTab === 'tertiary' && (displayStatus === 'Pending' || displayStatus === 'PENDING') &&
                               <li><button className="dropdown-item rounded-3 text-success fw-bold py-2 mb-1" onClick={() => handleOrderStatus('approve', o.id)}><div className="bg-success bg-opacity-10 d-inline-block p-2 rounded-circle me-2"><i className="fa-solid fa-check text-success"></i></div> Approve Sale</button></li>
                             }
 
-                            <li><hr className="dropdown-divider opacity-10 m-1" /></li>
-                            <li><button className="dropdown-item rounded-3 text-danger fw-bold py-2" onClick={() => handleOrderStatus('cancel', o.id)}><i className="fa-solid fa-ban text-danger me-3 ms-1"></i> Abort / Cancel</button></li>
+                            {/* CANCEL ORDERS */}
+                            {(!isDispatched) && (
+                              <>
+                                <li><hr className="dropdown-divider opacity-10 m-1" /></li>
+                                <li><button className="dropdown-item rounded-3 text-danger fw-bold py-2" onClick={() => handleOrderStatus('cancel', o.id)}><i className="fa-solid fa-ban text-danger me-3 ms-1"></i> Abort / Cancel</button></li>
+                              </>
+                            )}
                           </ul>
                         </div>
                       ) : (
-                        <span className="text-muted small fw-semibold fst-italic"><i className="fa-solid fa-lock me-1"></i> Locked</span>
+                        <span className="text-muted small fw-semibold fst-italic"><i className="fa-solid fa-lock me-1"></i> Processed</span>
                       )}
                     </td>
                   </tr>
@@ -717,6 +728,40 @@ export default function OrderHub() {
           </div>
         )}
       </div>
+
+      {/* --- MODAL: CONFIRM APPROVAL (CUSTOM POP-UP) --- */}
+      {approveConfirmId && (
+        <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(15, 23, 42, 0.7)', backdropFilter: 'blur(5px)', zIndex: 1090 }}>
+          <div className="modal-dialog modal-dialog-centered">
+            <div className="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+              <div className="modal-header bg-danger bg-gradient text-white border-0 p-4">
+                <div className="d-flex align-items-center">
+                  <div className="bg-white bg-opacity-25 rounded-circle d-flex justify-content-center align-items-center me-3" style={{ width: '45px', height: '45px' }}>
+                    <i className="fa-solid fa-triangle-exclamation fs-5"></i>
+                  </div>
+                  <h5 className="modal-title fw-bold m-0">Security Verification</h5>
+                </div>
+                <button type="button" className="btn-close btn-close-white opacity-75" onClick={() => setApproveConfirmId(null)}></button>
+              </div>
+              <div className="modal-body p-4 bg-light">
+                <h5 className="fw-bolder text-dark mb-3">Are you sure you want to approve this order?</h5>
+                <p className="text-muted fw-semibold mb-0" style={{ lineHeight: '1.6' }}>
+                  By confirming, you verify that you have checked <span className="text-danger">sufficient stock</span> and <span className="text-danger">partner credit/funds</span> to fulfill this request.
+                </p>
+              </div>
+              <div className="modal-footer border-0 p-4 bg-white">
+                <button type="button" className="btn btn-light fw-semibold px-4 rounded-pill" onClick={() => setApproveConfirmId(null)}>Cancel</button>
+                <button type="button" className="btn btn-danger fw-bold px-5 rounded-pill shadow-sm" onClick={() => {
+                  handleOrderStatus('approve', approveConfirmId, true); // true bypasses the popup check
+                  setApproveConfirmId(null);
+                }}>
+                  <i className="fa-solid fa-check-double me-2"></i> Confirm Approval
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* --- MODAL: PLACE ORDER --- */}
       {isOrderModalOpen && (
@@ -737,7 +782,6 @@ export default function OrderHub() {
                 <div className="modal-body p-4 bg-light">
                   <div className="row g-4">
 
-                    {/* PRIMARY ROUTING VECTOR SELECTOR */}
                     {activeTab === 'primary' && (
                       <div className="col-12 mb-2">
                         <label className="form-label small fw-bold text-uppercase text-muted mb-2">Primary Route Vector <span className="text-danger">*</span></label>
@@ -749,7 +793,6 @@ export default function OrderHub() {
                       </div>
                     )}
 
-                    {/* 1. DISPATCH ORIGIN */}
                     <div className="col-12">
                       <label className="form-label small fw-bold text-uppercase text-muted mb-1">Dispatch Origin <span className="text-danger">*</span></label>
 
@@ -766,7 +809,6 @@ export default function OrderHub() {
                             required
                             value={orderForm.from_id}
                             onChange={e => {
-                              // Reset Destination when Origin changes
                               setOrderForm({...orderForm, from_id: e.target.value, to_id: '', batch_number: ''});
                             }}
                           >
@@ -779,13 +821,11 @@ export default function OrderHub() {
                       )}
                     </div>
 
-                    {/* 2. DYNAMIC CASCADING GEO FILTER (Conditional rendering based on target tier) */}
                     {(orderForm.from_id || (activeTab === 'primary' && primaryRouting.startsWith('FACTORY'))) && (
                       <div className="col-12 p-3 bg-white rounded-4 shadow-sm border">
                         <label className="form-label small fw-bold text-uppercase text-primary mb-2"><i className="fa-solid fa-earth-asia me-2"></i> Find Target by Geography</label>
                         <div className="row g-2">
 
-                          {/* ALL TARGETS NEED ZONE */}
                           <div className="col-md-3">
                             <select className="form-select form-select-sm border bg-light shadow-none fw-semibold" value={geoFilter.zone_id} onChange={e => handleGeoChange('zone_id', e.target.value)}>
                               <option value="">Select Zone</option>
@@ -793,7 +833,6 @@ export default function OrderHub() {
                             </select>
                           </div>
 
-                          {/* DISTRIBUTORS, RETAILERS, CONSUMERS NEED STATE */}
                           {(getTargetTier() === 'distributor' || getTargetTier() === 'retailer' || getTargetTier() === 'consumer') && (
                             <div className="col-md-3">
                               <select className="form-select form-select-sm border bg-light shadow-none fw-semibold" value={geoFilter.state_id} onChange={e => handleGeoChange('state_id', e.target.value)} disabled={!geoFilter.zone_id}>
@@ -803,7 +842,6 @@ export default function OrderHub() {
                             </div>
                           )}
 
-                          {/* ONLY RETAILERS & CONSUMERS NEED REGION, AREA, TERRITORY */}
                           {(getTargetTier() === 'retailer' || getTargetTier() === 'consumer') && (
                             <>
                               <div className="col-md-3">
@@ -830,7 +868,6 @@ export default function OrderHub() {
                       </div>
                     )}
 
-                    {/* 3. DELIVERY DESTINATION */}
                     <div className="col-12 mt-2">
                       <label className="form-label small fw-bold text-uppercase text-muted mb-1">Delivery Destination <span className="text-danger">*</span></label>
                       <div className="input-group bg-white rounded-3 shadow-sm border overflow-hidden">
@@ -844,8 +881,6 @@ export default function OrderHub() {
                         >
 
                           <option value="" disabled>Select Target Destination...</option>
-
-                          {/* RENDER DYNAMICALLY FILTERED DESTINATIONS */}
                           {filteredDestinations.map(p => (
                             <option key={p.id} value={p.id}>{p.name || p.firm_name || p.shop_name} (ID: {p.id})</option>
                           ))}
@@ -853,7 +888,6 @@ export default function OrderHub() {
                         </select>
                       </div>
 
-                      {/* Empty state warning */}
                       {filteredDestinations.length === 0 && (orderForm.from_id || (activeTab === 'primary' && primaryRouting.startsWith('FACTORY'))) && (
                         <div className="form-text text-danger mt-1 small" style={{fontSize: '0.75rem'}}>
                           <i className="fa-solid fa-triangle-exclamation me-1"></i> No partners found in the selected geographical area. Please adjust filters.
@@ -861,7 +895,6 @@ export default function OrderHub() {
                       )}
                     </div>
 
-                    {/* TARGET PAYLOAD */}
                     <div className="col-md-5">
                       <label className="form-label small fw-bold text-uppercase text-muted mb-1">Target Payload (SKU) <span className="text-danger">*</span></label>
                       <div className="input-group bg-white rounded-3 shadow-sm border overflow-hidden">

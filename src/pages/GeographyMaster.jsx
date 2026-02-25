@@ -6,7 +6,6 @@ export default function GeographyMaster() {
   const [loading, setLoading] = useState(true);
 
   // --- HIERARCHICAL DATA STORE ---
-  // Instead of flat arrays, we map children to their parent IDs for instant tree rendering
   const [dataStore, setDataStore] = useState({
     root: [],      // Holds all Zones
     zone: {},      // States mapped by Zone ID
@@ -41,9 +40,14 @@ export default function GeographyMaster() {
     setLoading(true);
     try {
       const res = await api.get('/geo/zones');
-      setDataStore(prev => ({ ...prev, root: res.data }));
+
+      // SAFELY UNPACK ARRAY: Handles standard [] arrays or wrapped { items: [] }
+      const fetchedZones = Array.isArray(res.data) ? res.data : res.data?.items || [];
+
+      setDataStore(prev => ({ ...prev, root: fetchedZones }));
     } catch (err) {
       toast.error('Failed to connect to Geography API.');
+      console.error("Zone fetch error:", err);
     } finally {
       setLoading(false);
     }
@@ -52,28 +56,30 @@ export default function GeographyMaster() {
   // --- 2. LAZY LOAD CHILDREN ---
   const fetchChildren = async (level, id) => {
     const childConfig = config[level];
-    if (!childConfig.childLevel) return; // Territories have no children
+    if (!childConfig.childLevel) return;
 
     try {
-      // e.g., /geo/zones/1/states
       const parentApiEntity = config[level].childApi === 'states' ? 'zones' : level + 's';
       const res = await api.get(`/geo/${parentApiEntity}/${id}/${childConfig.childApi}`);
 
+      // SAFELY UNPACK ARRAY
+      const fetchedChildren = Array.isArray(res.data) ? res.data : res.data?.items || [];
+
       setDataStore(prev => ({
         ...prev,
-        [level]: { ...prev[level], [id]: res.data }
+        [level]: { ...prev[level], [id]: fetchedChildren }
       }));
     } catch (err) {
       toast.error(`Failed to load data for ${config[level].title}`);
+      console.error("Child fetch error:", err);
     }
   };
 
   // --- 3. TREE INTERACTION HANDLERS ---
   const toggleExpand = async (e, level, id) => {
-    e.stopPropagation(); // Don't trigger the row click
+    e.stopPropagation();
     const isExpanded = expandedNodes[level][id];
 
-    // If opening for the first time, fetch data
     if (!isExpanded && !dataStore[level][id]) {
       await fetchChildren(level, id);
     }
@@ -88,7 +94,6 @@ export default function GeographyMaster() {
     setActiveNode({ level, id, name });
     setNewItemName('');
 
-    // Pre-fetch children for the right pane if not already loaded
     if (level !== 'territory' && level !== 'root' && !dataStore[level][id]) {
       await fetchChildren(level, id);
     }
@@ -99,7 +104,7 @@ export default function GeographyMaster() {
     if (!newItemName.trim()) return;
 
     const currConfig = config[activeNode.level];
-    const childLevel = currConfig.childLevel; // What are we creating?
+    const childLevel = currConfig.childLevel;
     const childConfig = config[childLevel];
 
     const toastId = toast.loading(`Creating ${childConfig.title}...`);
@@ -107,22 +112,26 @@ export default function GeographyMaster() {
     try {
       const payload = { name: newItemName };
 
-      // If not creating a Zone, attach the Parent ID
-      if (childConfig.childIdField) {
-        payload[childConfig.childIdField] = activeNode.id;
+      // Set the proper parent foreign key ID
+      if (currConfig.childIdField) {
+        payload[currConfig.childIdField] = activeNode.id;
       }
 
-      const res = await api.post(`/geo/${childConfig.childApi}`, payload);
+      // Hit proper endpoint
+      const res = await api.post(`/geo/${currConfig.childApi}`, payload);
 
-      // Instantly update the data store
+      // Safely extract the new object whether it's wrapped in an object or plain
+      const newItem = res.data?.item || res.data;
+
+      // Instantly update the data store to reflect in UI
       if (activeNode.level === 'root') {
-        setDataStore(prev => ({ ...prev, root: [...prev.root, res.data] }));
+        setDataStore(prev => ({ ...prev, root: [...prev.root, newItem] }));
       } else {
         setDataStore(prev => ({
           ...prev,
           [activeNode.level]: {
             ...prev[activeNode.level],
-            [activeNode.id]: [...(prev[activeNode.level][activeNode.id] || []), res.data]
+            [activeNode.id]: [...(prev[activeNode.level][activeNode.id] || []), newItem]
           }
         }));
       }
@@ -142,10 +151,7 @@ export default function GeographyMaster() {
     try {
       await api.delete(`/geo/zones/${activeNode.id}`);
 
-      // Remove from Root array
       setDataStore(prev => ({ ...prev, root: prev.root.filter(z => z.id !== activeNode.id) }));
-
-      // Reset view to Global Network
       setActiveNode({ level: 'root', id: null, name: 'Global Network' });
       toast.success('Zone permanently deleted.', { id: toastId });
     } catch (err) {
@@ -156,7 +162,7 @@ export default function GeographyMaster() {
   // --- DYNAMIC DATA FOR RIGHT PANE ---
   const getRightPaneData = () => {
     if (activeNode.level === 'root') return dataStore.root;
-    if (activeNode.level === 'territory') return []; // End of line
+    if (activeNode.level === 'territory') return [];
     return dataStore[activeNode.level][activeNode.id] || [];
   };
 
@@ -208,7 +214,7 @@ export default function GeographyMaster() {
   };
 
   return (
-    <div className="container-fluid p-4 d-flex flex-column" style={{ backgroundColor: '#f4f7f8', height: '100vh', overflow: 'hidden' }}>
+    <div className="container-fluid p-4 d-flex flex-column" style={{ height: '100vh', overflow: 'hidden' }}>
       <Toaster position="top-right" toastOptions={{ style: { borderRadius: '10px', background: '#333', color: '#fff' } }} />
 
       {/* HEADER */}
@@ -280,7 +286,7 @@ export default function GeographyMaster() {
               )}
             </div>
 
-            {/* Input Form Area (If it has children) */}
+            {/* Input Form Area */}
             {targetChildCfg && (
               <div className="px-4 py-3 bg-light border-bottom">
                 <label className="form-label small fw-bold text-uppercase text-muted mb-1">

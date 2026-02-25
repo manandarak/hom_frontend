@@ -16,44 +16,49 @@ const initialUserForm = {
 };
 
 export default function UserMatrix() {
-  const [activeTab, setActiveTab] = useState('users'); // 'users', 'matrix'
+  const [activeTab, setActiveTab] = useState('users');
   const [loading, setLoading] = useState(false);
 
-  // Data States
   const [users, setUsers] = useState([]);
   const [roles, setRoles] = useState([]);
   const [permissions, setPermissions] = useState([]);
 
-  // Geo Hierarchy State
   const [geoMaster, setGeoMaster] = useState({
     zones: [], states: [], regions: [], areas: [], territories: []
   });
 
-  // Modal States
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
   const [isRoleModalOpen, setIsRoleModalOpen] = useState(false);
-
-  // Tracking Edit States
   const [editingUserId, setEditingUserId] = useState(null);
 
-  // Forms
   const [userForm, setUserForm] = useState(initialUserForm);
   const [roleForm, setRoleForm] = useState({ name: '', description: '' });
   const [searchQuery, setSearchQuery] = useState('');
 
-  // --- MATRIX STATE ---
-  // Tracks exactly which permissions belong to which role: { roleId: [permId1, permId2] }
   const [matrixState, setMatrixState] = useState({});
-  const [dirtyRoles, setDirtyRoles] = useState(new Set()); // Tracks which columns were edited
+  const [dirtyRoles, setDirtyRoles] = useState(new Set());
 
-  // --- API FETCHERS ---
+  // --- BULLETPROOF API FETCHERS ---
   const fetchData = async () => {
     setLoading(true);
     try {
+      // Individual catches prevent the whole page from crashing!
       const [usersRes, rolesRes, permsRes, zonesRes] = await Promise.all([
-        api.get('/users/'),
-        api.get('/users/roles'),
-        api.get('/users/permissions'),
+        api.get('/users/').catch(err => {
+            console.error("Users API crashed:", err);
+            toast.error("Failed to load Users (Check Terminal)");
+            return { data: [] };
+        }),
+        api.get('/users/roles').catch(err => {
+            console.error("Roles API crashed:", err);
+            toast.error("Failed to load Roles (Check Terminal)");
+            return { data: [] };
+        }),
+        api.get('/users/permissions').catch(err => {
+            console.error("Permissions API crashed:", err);
+            toast.error("Failed to load Permissions (Check Terminal)");
+            return { data: [] };
+        }),
         api.get('/geo/zones').catch(() => ({ data: [] }))
       ]);
 
@@ -66,16 +71,15 @@ export default function UserMatrix() {
       setPermissions(fetchedPerms);
       setGeoMaster(prev => ({ ...prev, zones: Array.isArray(zonesRes.data) ? zonesRes.data : zonesRes.data?.items || [] }));
 
-      // Initialize Matrix State from fetched roles
       const initialMatrix = {};
       fetchedRoles.forEach(role => {
         initialMatrix[role.id] = role.permissions ? role.permissions.map(p => p.id || p) : [];
       });
       setMatrixState(initialMatrix);
-      setDirtyRoles(new Set()); // Clear dirty state on fresh load
+      setDirtyRoles(new Set());
 
     } catch (err) {
-      toast.error('Failed to load Identity & Access data.');
+      toast.error('Critical failure loading Identity data.');
       console.error(err);
     } finally {
       setLoading(false);
@@ -86,7 +90,17 @@ export default function UserMatrix() {
     fetchData();
   }, []);
 
-  // --- CASCADING GEO HANDLER FOR USER FORM ---
+  const handleSeedPermissions = async () => {
+    const toastId = toast.loading('Injecting master permission list into DB...');
+    try {
+      await api.post('/users/seed-permissions');
+      toast.success('Permissions seeded successfully!', { id: toastId });
+      fetchData();
+    } catch (err) {
+      toast.error('Failed to seed permissions.', { id: toastId });
+    }
+  };
+
   const handleGeoChange = async (field, value) => {
     setUserForm(prev => ({ ...prev, [field]: value }));
 
@@ -124,7 +138,6 @@ export default function UserMatrix() {
     }
   };
 
-  // --- USER MUTATIONS ---
   const openUserModal = (user = null) => {
     if (user) {
       setEditingUserId(user.id);
@@ -190,7 +203,6 @@ export default function UserMatrix() {
     }
   };
 
-  // --- ROLE / MATRIX MUTATIONS ---
   const handleRoleSubmit = async (e) => {
     e.preventDefault();
     const toastId = toast.loading('Creating new role policy...');
@@ -214,17 +226,13 @@ export default function UserMatrix() {
 
       return { ...prev, [roleId]: newPerms };
     });
-
-    // Mark this role as dirty so we know we need to save it
     setDirtyRoles(prev => new Set(prev).add(roleId));
   };
 
   const saveMatrixChanges = async () => {
     if (dirtyRoles.size === 0) return;
-
     const toastId = toast.loading(`Saving matrix changes for ${dirtyRoles.size} roles...`);
     try {
-      // Create an array of API promises for every role that was changed
       const updatePromises = Array.from(dirtyRoles).map(roleId =>
         api.put(`/users/roles/${roleId}/permissions`, {
           permission_ids: matrixState[roleId]
@@ -233,8 +241,8 @@ export default function UserMatrix() {
 
       await Promise.all(updatePromises);
       toast.success('Permission Matrix updated successfully!', { id: toastId });
-      setDirtyRoles(new Set()); // Reset dirty tracker
-      fetchData(); // Refresh to confirm backend sync
+      setDirtyRoles(new Set());
+      fetchData();
     } catch (err) {
       toast.error(`Error saving matrix: ${err.response?.data?.detail || err.message}`, { id: toastId });
     }
@@ -249,7 +257,6 @@ export default function UserMatrix() {
     <div className="container-fluid p-4" style={{ backgroundColor: '#f4f7f8', minHeight: '100vh' }}>
       <Toaster position="top-right" toastOptions={{ style: { borderRadius: '10px', background: '#333', color: '#fff' } }} />
 
-      {/* HEADER */}
       <div className="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-4 gap-3">
         <div>
           <h3 className="fw-bolder m-0 text-dark" style={{ letterSpacing: '-0.5px' }}>
@@ -270,7 +277,6 @@ export default function UserMatrix() {
         </div>
       </div>
 
-      {/* TIER NAVIGATION */}
       <div className="card border-0 shadow-sm rounded-4 mb-4 bg-white">
         <div className="card-body p-3 d-flex flex-column flex-md-row justify-content-between align-items-center gap-3">
           <div className="nav nav-pills p-1 bg-light rounded-pill d-inline-flex w-100 w-md-auto">
@@ -306,10 +312,7 @@ export default function UserMatrix() {
         </div>
       </div>
 
-      {/* DYNAMIC CONTENT AREA */}
       <div className="card border-0 shadow-sm rounded-4 overflow-hidden bg-white">
-
-        {/* VIEW: USERS */}
         {activeTab === 'users' && (
           <div className="table-responsive">
             <table className="table table-hover align-middle mb-0">
@@ -384,7 +387,6 @@ export default function UserMatrix() {
           </div>
         )}
 
-        {/* --- TRUE USER MATRIX VIEW --- */}
         {activeTab === 'matrix' && (
           <div className="table-responsive">
             <table className="table table-bordered table-hover align-middle mb-0 text-center">
@@ -405,7 +407,18 @@ export default function UserMatrix() {
                 {loading ? (
                   <tr><td colSpan={roles.length + 1} className="text-center py-5"><div className="spinner-border text-primary"></div></td></tr>
                 ) : permissions.length === 0 ? (
-                  <tr><td colSpan={roles.length + 1} className="text-center py-5 text-muted">No permissions found in the system.</td></tr>
+                  <tr>
+                    <td colSpan={roles.length + 1} className="text-center py-5">
+                      <div className="text-muted mb-3">
+                        <i className="fa-solid fa-database fs-1 opacity-25"></i>
+                      </div>
+                      <h5 className="fw-bold text-dark">Database is missing core permissions!</h5>
+                      <p className="text-muted small">You recently reset the database. You need to seed the default permissions.</p>
+                      <button className="btn btn-primary mt-2 shadow-sm fw-bold px-4 rounded-pill" onClick={handleSeedPermissions}>
+                        <i className="fa-solid fa-seedling me-2"></i> Seed Default Permissions
+                      </button>
+                    </td>
+                  </tr>
                 ) : permissions.map(perm => (
                   <tr key={perm.id}>
                     <td className="text-start px-4 py-3 bg-light border-end">
@@ -424,7 +437,7 @@ export default function UserMatrix() {
                              className="form-check-input fs-4 m-0 shadow-sm border-secondary border-opacity-25 cursor-pointer"
                              checked={hasPermission}
                              onChange={() => toggleMatrixPermission(role.id, perm.id)}
-                             onClick={(e) => e.stopPropagation()} // Prevent double firing from td click
+                             onClick={(e) => e.stopPropagation()}
                            />
                          </td>
                        );
@@ -458,7 +471,6 @@ export default function UserMatrix() {
                 <div className="modal-body p-4 bg-light">
                   <div className="row g-3">
 
-                    {/* CORE USER DETAILS */}
                     <div className="col-12">
                       <label className="form-label small fw-bold text-uppercase text-muted mb-1">Username <span className="text-danger">*</span></label>
                       <div className="input-group bg-white rounded-3 shadow-sm border overflow-hidden">
@@ -493,7 +505,6 @@ export default function UserMatrix() {
                       </div>
                     </div>
 
-                    {/* GEOGRAPHICAL HIERARCHY SCOPING */}
                     <div className="col-12 mt-4 p-3 bg-white rounded-4 border shadow-sm">
                        <label className="form-label fw-bold text-uppercase text-primary mb-2">
                          <i className="fa-solid fa-map-location-dot me-2"></i> Geographical Hierarchy Scoping <span className="text-muted small text-transform-none fw-normal">(Optional)</span>
@@ -539,7 +550,6 @@ export default function UserMatrix() {
                        </div>
                     </div>
 
-                    {/* STATUS SWITCH */}
                     {editingUserId && (
                        <div className="col-12 mt-4 p-3 bg-white rounded-3 border shadow-sm">
                          <div className="form-check form-switch d-flex align-items-center m-0">

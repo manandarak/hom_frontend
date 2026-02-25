@@ -10,6 +10,8 @@ export default function InventoryMaster() {
   const [masterData, setMasterData] = useState({
     products: [],
     ss: [],
+    distributors: [],
+    retailers: [],
     factories: [
       { id: 1, name: 'Main Assembly Plant (HQ)' },
       { id: 2, name: 'Secondary Manufacturing Unit' }
@@ -35,7 +37,7 @@ export default function InventoryMaster() {
     product_id: '',
     quantity_produced: '',
     batch_number: '',
-    production_date: new Date().toISOString().split('T')[0] // Defaults to today
+    production_date: new Date().toISOString().split('T')[0]
   });
 
   const [adjustForm, setAdjustForm] = useState({ entity_type: 'factory', entity_id: '1', product_id: '', quantity: '', reason: '' });
@@ -44,15 +46,19 @@ export default function InventoryMaster() {
   useEffect(() => {
     const fetchMasterData = async () => {
       try {
-        const [prodRes, ssRes] = await Promise.all([
+        const [prodRes, ssRes, distRes, retRes] = await Promise.all([
           api.get('/products').catch(() => ({ data: [] })),
-          api.get('/partners/super-stockists').catch(() => ({ data: [] }))
+          api.get('/partners/super-stockists').catch(() => ({ data: [] })),
+          api.get('/partners/distributors').catch(() => ({ data: [] })),
+          api.get('/partners/retailers').catch(() => ({ data: [] }))
         ]);
 
         setMasterData(prev => ({
           ...prev,
           products: Array.isArray(prodRes.data) ? prodRes.data : prodRes.data?.items || [],
-          ss: Array.isArray(ssRes.data) ? ssRes.data : ssRes.data?.items || []
+          ss: Array.isArray(ssRes.data) ? ssRes.data : ssRes.data?.items || [],
+          distributors: Array.isArray(distRes.data) ? distRes.data : distRes.data?.items || [],
+          retailers: Array.isArray(retRes.data) ? retRes.data : retRes.data?.items || []
         }));
       } catch (err) {
         console.error("Hydration failed", err);
@@ -69,7 +75,7 @@ export default function InventoryMaster() {
   };
 
   const getEntityName = (type, id) => {
-    if (!type) return `Unknown Entity #${id}`;
+    if (!type || !id) return `Unknown Entity #${id}`;
 
     const safeType = type.toLowerCase();
 
@@ -77,14 +83,39 @@ export default function InventoryMaster() {
       const f = masterData.factories.find(x => x.id === parseInt(id));
       return f ? f.name : `Factory #${id}`;
     }
-
     if (safeType === 'superstockist' || safeType === 'ss') {
       const ss = masterData.ss.find(x => x.id === parseInt(id));
-      return ss ? ss.name || ss.firm_name : `SS #${id}`;
+      return ss ? ss.name || ss.firm_name : `Super Stockist #${id}`;
+    }
+    if (safeType === 'distributor') {
+      const d = masterData.distributors.find(x => x.id === parseInt(id));
+      return d ? d.name || d.firm_name || d.shop_name : `Distributor #${id}`;
+    }
+    if (safeType === 'retailer') {
+      const r = masterData.retailers.find(x => x.id === parseInt(id));
+      return r ? r.name || r.firm_name || r.shop_name : `Retailer #${id}`;
     }
 
-    // Fallback for Distributors, Retailers, and Consumers
     return `${type.charAt(0).toUpperCase() + type.slice(1).toLowerCase()} #${id}`;
+  };
+
+  const getMovementVector = (txType, entityType) => {
+    const t = txType ? txType.toUpperCase() : '';
+
+    if (t === 'PRODUCTION') return { text: '🏭 Factory Production', badge: 'bg-dark text-white' };
+    if (t === 'DISPATCH_OUT_FACTORY') return { text: '🏭 Factory ➝ 🚚 Transit', badge: 'bg-primary text-white shadow-sm' };
+    if (t === 'DISPATCH_IN_TRANSIT') return { text: '🚚 Entered Logistics Network', badge: 'bg-secondary text-white' };
+    if (t === 'RECEIPT_OUT_TRANSIT') return { text: '🚚 Cleared from Logistics', badge: 'bg-secondary bg-opacity-75 text-white' };
+    if (t === 'RECEIPT_IN_SUPERSTOCKIST') return { text: '🚚 Transit ➝ 🏢 Super Stockist', badge: 'bg-info text-dark fw-bold shadow-sm' };
+    if (t === 'RECEIPT_IN_DISTRIBUTOR') return { text: '🚚 Transit ➝ 🏢 Distributor', badge: 'bg-info text-dark fw-bold shadow-sm' };
+    if (t.includes('SEC_DISPATCH_OUT') || t.includes('SECONDARY_SALE_OUT')) return { text: '🏢 Distributor ➝ 🚚 Van Dispatch', badge: 'bg-warning text-dark fw-bold shadow-sm' };
+    if (t.includes('SEC_RECEIVE_IN') || t.includes('SECONDARY_SALE_IN')) return { text: '🚚 Arrived at 🏪 Retailer', badge: 'bg-success text-white shadow-sm' };
+    if (t === 'RETAIL_SALE') return { text: '🏪 Retailer ➝ 💈 Barber / Consumer', badge: 'bg-success bg-gradient text-white shadow-sm' };
+
+    if (t.includes('CANCEL')) return { text: `↩️ Reverted Stock (${entityType})`, badge: 'bg-danger text-white' };
+    if (t === 'ADJUSTMENT') return { text: `⚖️ Audit Adjustment (${entityType})`, badge: 'bg-light text-dark border border-secondary border-opacity-50' };
+
+    return { text: `🔄 ${t || 'UNKNOWN'}`, badge: 'bg-light text-dark border border-secondary border-opacity-50' };
   };
 
   // --- DATA FETCHERS ---
@@ -143,7 +174,6 @@ export default function InventoryMaster() {
       toast.success('Production successfully logged!', { id: toastId });
       setIsProduceModalOpen(false);
 
-      // Reset form but keep the selected factory
       setProduceForm({
         factory_id: produceForm.factory_id,
         product_id: '',
@@ -152,7 +182,6 @@ export default function InventoryMaster() {
         production_date: new Date().toISOString().split('T')[0]
       });
 
-      // Refresh data if looking at the same factory
       if (activeTab === 'factory' && selectedFactoryId === produceForm.factory_id) {
           fetchFactoryStock(produceForm.factory_id);
       }
@@ -168,7 +197,7 @@ export default function InventoryMaster() {
       const { entity_type, entity_id, product_id, quantity, reason } = adjustForm;
       await api.post(`/inventory/${entity_type}/${entity_id}/adjust`, {
         product_id: parseInt(product_id),
-        quantity_change: parseInt(quantity), // Assuming backend expects quantity_change
+        quantity_change: parseInt(quantity),
         reference_document: reason || 'Manual Adjustment',
         transaction_type: 'ADJUSTMENT'
       });
@@ -211,13 +240,13 @@ export default function InventoryMaster() {
       <div className="card border-0 shadow-sm rounded-4 mb-4 bg-white">
         <div className="card-body p-3 d-flex flex-column flex-md-row justify-content-between align-items-center gap-3">
           <div className="nav nav-pills p-1 bg-light rounded-pill d-inline-flex w-100 w-md-auto">
-            <button className={`nav-link rounded-pill flex-grow-1 px-4 ${activeTab === 'factory' ? 'active shadow-sm fw-bold' : 'text-dark'}`} onClick={() => setActiveTab('factory')}>
+            <button className={`nav-link rounded-pill flex-grow-1 px-4 ${activeTab === 'factory' ? 'active shadow-sm fw-bold' : 'text-dark fw-semibold'}`} onClick={() => setActiveTab('factory')}>
               <i className="fa-solid fa-industry me-2"></i> Factory Stock
             </button>
-            <button className={`nav-link rounded-pill flex-grow-1 px-4 ${activeTab === 'ss' ? 'active shadow-sm fw-bold' : 'text-dark'}`} onClick={() => setActiveTab('ss')}>
+            <button className={`nav-link rounded-pill flex-grow-1 px-4 ${activeTab === 'ss' ? 'active shadow-sm fw-bold' : 'text-dark fw-semibold'}`} onClick={() => setActiveTab('ss')}>
               <i className="fa-solid fa-warehouse me-2"></i> Super Stockists
             </button>
-            <button className={`nav-link rounded-pill flex-grow-1 px-4 ${activeTab === 'ledger' ? 'active shadow-sm fw-bold bg-dark text-white' : 'text-dark'}`} onClick={() => setActiveTab('ledger')}>
+            <button className={`nav-link rounded-pill flex-grow-1 px-4 ${activeTab === 'ledger' ? 'active shadow-sm fw-bold bg-dark text-white' : 'text-dark fw-semibold'}`} onClick={() => setActiveTab('ledger')}>
               <i className="fa-solid fa-book-journal-whills me-2"></i> Global Ledger
             </button>
           </div>
@@ -268,7 +297,6 @@ export default function InventoryMaster() {
                   if (currentList.length === 0) return <tr><td colSpan="4" className="text-center py-5 text-muted fw-bold"><i className="fa-solid fa-box-open fs-2 mb-3 opacity-25 d-block"></i> No stock registered.</td></tr>;
 
                   return currentList.map((item, idx) => {
-                    // SECURE MAPPING: Gracefully handle current_stock_qty, current_stock, or quantity
                     const stockQty = item.current_stock_qty ?? item.current_stock ?? item.quantity ?? 0;
 
                     return (
@@ -296,17 +324,17 @@ export default function InventoryMaster() {
           </div>
         )}
 
-        {/* LEDGER TABLE */}
+        {/* --- UPDATED LEDGER TABLE WITH OPENING/CLOSING FLOW --- */}
         {activeTab === 'ledger' && (
           <div className="table-responsive">
             <table className="table table-hover align-middle mb-0">
               <thead className="bg-dark text-white">
                 <tr>
-                  <th className="px-4 py-3 text-uppercase fw-bold border-0" style={{ fontSize: '0.75rem' }}>Audit Trace</th>
-                  <th className="py-3 text-uppercase fw-bold border-0" style={{ fontSize: '0.75rem' }}>Entity Vector</th>
-                  <th className="py-3 text-uppercase fw-bold border-0" style={{ fontSize: '0.75rem' }}>Asset</th>
-                  <th className="py-3 text-uppercase fw-bold border-0" style={{ fontSize: '0.75rem' }}>Delta</th>
-                  <th className="text-end px-4 py-3 text-uppercase fw-bold border-0" style={{ fontSize: '0.75rem' }}>Timestamp</th>
+                  <th className="px-4 py-3 text-uppercase fw-bold border-secondary" style={{ fontSize: '0.75rem' }}>Timestamp</th>
+                  <th className="py-3 text-uppercase fw-bold border-secondary" style={{ fontSize: '0.75rem' }}>Ref Document</th>
+                  <th className="py-3 text-uppercase fw-bold border-secondary" style={{ fontSize: '0.75rem' }}>Movement Vector (From ➝ To)</th>
+                  <th className="py-3 text-uppercase fw-bold border-secondary" style={{ fontSize: '0.75rem' }}>SKU / Batch</th>
+                  <th className="px-4 py-3 text-uppercase fw-bold border-secondary text-center" style={{ fontSize: '0.75rem', minWidth: '220px' }}>Stock Impact (Opening ➝ Delta ➝ Closing)</th>
                 </tr>
               </thead>
               <tbody>
@@ -314,41 +342,73 @@ export default function InventoryMaster() {
                  ledger.length === 0 ? <tr><td colSpan="5" className="text-center py-5 text-muted"><i className="fa-solid fa-clipboard fs-2 mb-3 opacity-25 d-block"></i> Ledger is pristine.</td></tr> :
                  ledger.map((log, idx) => {
 
-                  // Handle backend naming variations dynamically
+                  const vector = getMovementVector(log.transaction_type, log.entity_type);
+
+                  // --- MATH LOGIC ---
                   const delta = log.quantity_change ?? log.quantity ?? 0;
+                  const closing = log.closing_balance !== undefined && log.closing_balance !== null ? log.closing_balance : 0;
+                  const opening = closing - delta; // Calculate Opening Balance!
+                  const isPositive = delta > 0;
 
                   return (
                     <tr key={log.id || idx}>
-                      <td className="px-4"><small className="text-muted font-monospace bg-light px-2 py-1 rounded border">TXN-{log.id}</small></td>
-                      <td>
-                        <div className="d-flex align-items-center">
-                          <span className={`badge rounded-pill me-3 shadow-sm ${log.transaction_type === 'PRODUCTION' ? 'bg-primary' : log.transaction_type === 'ADJUSTMENT' ? 'bg-warning text-dark' : 'bg-secondary'}`}>
-                            {log.transaction_type || 'TRANSFER'}
-                          </span>
-                          <div>
-                            <div className="fw-bolder text-dark">{getEntityName(log.entity_type, log.entity_id)}</div>
-                            <div className="small text-muted text-uppercase fw-semibold">{log.entity_type}</div>
-                          </div>
+                      <td className="px-4">
+                        <div className="fw-bold text-dark" style={{ fontSize: '0.85rem' }}>
+                          {new Date(log.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                        </div>
+                        <div className="text-muted small fw-semibold">
+                          {new Date(log.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
                         </div>
                       </td>
+
                       <td>
-                        <div className="fw-bold text-dark">{getProductName(log.product_id)}</div>
+                        <code className="bg-light text-dark px-2 py-1 rounded border shadow-sm fw-bold">
+                          {log.reference_document || `TXN-${log.id}`}
+                        </code>
                       </td>
+
                       <td>
-                        <span className={`fs-5 fw-bold ${delta > 0 ? 'text-success' : 'text-danger'}`}>
-                          {delta > 0 ? '+' : ''}{delta}
+                        <span className={`badge rounded-pill px-3 py-2 ${vector.badge}`}>
+                          {vector.text}
                         </span>
-                        {/* Display Closing Balance directly from the ledger */}
-                        {log.closing_balance !== undefined && log.closing_balance !== null && (
-                           <div className="small text-muted fw-semibold mt-1">
-                             <i className="fa-solid fa-scale-balanced me-1 opacity-50"></i>
-                             Bal: {log.closing_balance}
-                           </div>
+                        <div className="mt-1 small fw-bold text-muted opacity-75 ms-2">
+                          Owner: {getEntityName(log.entity_type, log.entity_id)}
+                        </div>
+                      </td>
+
+                      <td>
+                        <div className="fw-bolder text-dark mb-1">{getProductName(log.product_id)}</div>
+                        {log.batch_number && (
+                          <span className="badge bg-secondary bg-opacity-10 text-secondary border border-secondary border-opacity-25 rounded-pill">
+                            <i className="fa-solid fa-barcode me-1"></i> {log.batch_number}
+                          </span>
                         )}
                       </td>
-                      <td className="text-end px-4">
-                        <div className="text-dark fw-semibold">{new Date(log.created_at || Date.now()).toLocaleDateString()}</div>
-                        <small className="text-muted">{new Date(log.created_at || Date.now()).toLocaleTimeString()}</small>
+
+                      {/* --- NEW VISUAL MATH FLOW --- */}
+                      <td className="px-4">
+                        <div className="d-flex align-items-center justify-content-between bg-light rounded-pill px-3 py-2 border shadow-sm">
+                          {/* OPENING BALANCE */}
+                          <div className="text-center" style={{ minWidth: '40px' }} title="Opening Balance">
+                             <span className="text-muted fw-bold small">{opening}</span>
+                          </div>
+
+                          <i className="fa-solid fa-arrow-right mx-2 text-muted opacity-50"></i>
+
+                          {/* DELTA (CHANGE) */}
+                          <div className="text-center" style={{ minWidth: '60px' }}>
+                            <span className={`badge rounded-pill fs-6 px-3 shadow-sm ${isPositive ? 'bg-success' : 'bg-danger'}`} title="Quantity Change">
+                              {isPositive ? '+' : ''}{delta}
+                            </span>
+                          </div>
+
+                          <i className="fa-solid fa-arrow-right mx-2 text-muted opacity-50"></i>
+
+                          {/* CLOSING BALANCE */}
+                          <div className="text-center" style={{ minWidth: '40px' }} title="Closing Balance">
+                            <span className="text-dark fw-bolder fs-5">{closing}</span>
+                          </div>
+                        </div>
                       </td>
                     </tr>
                   )
