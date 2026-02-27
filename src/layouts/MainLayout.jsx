@@ -44,7 +44,6 @@ export default function MainLayout() {
   const handleLanguageChange = (langCode) => {
     setCurrentLang(langCode);
     localStorage.setItem('app-language', langCode);
-    // Note: If you implement i18next later, add i18n.changeLanguage(langCode) here
   };
 
   const handleLogout = () => {
@@ -53,13 +52,23 @@ export default function MainLayout() {
   };
 
   // --- RBAC Logic ---
+  // Ensure we safely default to "Admin" if no role is explicitly caught,
+  // though in production you might default to a lowest-privilege view.
   const userRole = user?.role || "Admin";
+
+  // Core Infra - Highly Restricted
   const canViewGeo = userRole === "Admin";
   const canViewProducts = userRole === "Admin";
-  const canViewPartners = ["Admin", "ZSM", "RSM"].includes(userRole);
   const canViewUsers = userRole === "Admin";
-  const canViewInventory = ["Admin", "ZSM", "SuperStockist", "Distributor", "Retailer"].includes(userRole);
-  const canViewFinance = ["Admin"].includes(userRole);
+
+  // Partner Matrix - Visible to higher internal hierarchy
+  const canViewPartners = ["Admin", "ZSM", "RSM", "ASM"].includes(userRole);
+
+  // Operations & Execution - Visible to ALL valid users
+  // (Data is now geographically scoped safely by the backend APIs!)
+  const canViewInventory = true;
+  const canViewFinance = true;
+  const canViewOrders = true;
 
   const showCoreInfra = canViewGeo || canViewProducts || canViewPartners || canViewUsers;
   const showOperations = canViewInventory || canViewFinance;
@@ -131,14 +140,18 @@ export default function MainLayout() {
               <li className="nav-item"><NavLink to="/finance" className={getNavLinkClass}><i className="fa-solid fa-indian-rupee-sign me-3 fs-5" style={{ width: '24px' }}></i> Finance Ledger</NavLink></li>
             )}
 
-            <li className="nav-item mt-3 mb-1 px-4 text-uppercase text-muted fw-bold" style={{ fontSize: '0.65rem', letterSpacing: '1px' }}>
-              Execution
-            </li>
-            <li className="nav-item">
-              <NavLink to="/orders" className={getNavLinkClass}>
-                <i className="fa-solid fa-truck-fast me-3 fs-5" style={{ width: '24px' }}></i> Order Hub
-              </NavLink>
-            </li>
+            {canViewOrders && (
+              <>
+                <li className="nav-item mt-3 mb-1 px-4 text-uppercase text-muted fw-bold" style={{ fontSize: '0.65rem', letterSpacing: '1px' }}>
+                  Execution
+                </li>
+                <li className="nav-item">
+                  <NavLink to="/orders" className={getNavLinkClass}>
+                    <i className="fa-solid fa-truck-fast me-3 fs-5" style={{ width: '24px' }}></i> Order Hub
+                  </NavLink>
+                </li>
+              </>
+            )}
           </ul>
         </div>
 

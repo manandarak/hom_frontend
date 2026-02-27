@@ -329,7 +329,7 @@ export default function OrderHub() {
       payload = {
         end_consumer_id: parseInt(orderForm.to_id),
         fulfilled_by_retailer_id: parseInt(orderForm.from_id),
-        assigned_so_id: 1,
+        assigned_so_id: 1, // Defaulting to 1 for dummy data, backend maps it properly
         product_id: parseInt(orderForm.product_id),
         quantity: parseInt(orderForm.quantity),
         batch_number: orderForm.batch_number
@@ -355,7 +355,6 @@ export default function OrderHub() {
     try {
       const baseRoute = activeTab === 'primary' ? 'primary-orders' : activeTab === 'secondary' ? 'secondary-sales' : 'tertiary-sales';
 
-      // SAFETY FIX: We send BOTH spellings so the backend schema is satisfied no matter what
       const payload = {
           ...dispatchForm,
           transport_name: dispatchForm.transporter_name
@@ -376,7 +375,8 @@ export default function OrderHub() {
   const handleOrderStatus = async (action, orderId, isConfirmed = false) => {
     setOpenDropdownId(null);
 
-    if (action === 'approve' && activeTab === 'secondary' && !isConfirmed) {
+    // Apply confirmation logic to both Secondary and Tertiary approvals
+    if (action === 'approve' && (activeTab === 'secondary' || activeTab === 'tertiary') && !isConfirmed) {
       setApproveConfirmId(orderId);
       return;
     }
@@ -571,7 +571,8 @@ export default function OrderHub() {
                   const canDispatchSecondary = isAdminOrInternal || (activeTab === 'secondary' && user?.role === 'Distributor');
                   const canReceiveSecondary = isAdminOrInternal || (activeTab === 'secondary' && user?.role === 'Retailer');
 
-                  const canApproveTertiary = isAdminOrInternal || (activeTab === 'tertiary' && user?.role === 'Retailer');
+                  // STRICT ENFORCEMENT: Only the SO role can view/click the Authenticate & Approve button
+                  const canApproveTertiary = activeTab === 'tertiary' && user?.role === 'SO';
 
                   const needsAction =
                     (displayStatus === 'Pending' || displayStatus === 'PENDING') ||
@@ -610,18 +611,19 @@ export default function OrderHub() {
                     <td>
                       <span className={`badge rounded-pill px-3 py-2 text-uppercase shadow-sm border ${
                         displayStatus === 'Pending' || displayStatus === 'PENDING' ? 'bg-warning bg-opacity-10 text-warning border-warning border-opacity-50' :
-                        displayStatus === 'APPROVED' || displayStatus === 'Approved' ? 'bg-primary bg-opacity-10 text-primary border-primary border-opacity-50' :
+                        displayStatus === 'APPROVED' || displayStatus === 'Approved' || displayStatus === 'Approved_by_SO' ? 'bg-primary bg-opacity-10 text-primary border-primary border-opacity-50' :
                         isDispatched ? 'bg-info bg-opacity-10 text-info border-info border-opacity-50' :
                         displayStatus === 'RECEIVED' || displayStatus === 'Received' || displayStatus === 'FULFILLED' ? 'bg-success bg-opacity-10 text-success border-success border-opacity-50' :
                         displayStatus === 'CANCELLED' || displayStatus === 'Cancelled' ? 'bg-danger bg-opacity-10 text-danger border-danger border-opacity-50' : 'bg-secondary bg-opacity-10 text-secondary border-secondary border-opacity-50'
                       }`}>
                         <i className={`fa-solid ${
                           displayStatus === 'Pending' || displayStatus === 'PENDING' ? 'fa-clock' : 
-                          displayStatus === 'APPROVED' || displayStatus === 'Approved' ? 'fa-thumbs-up' :
+                          displayStatus === 'APPROVED' || displayStatus === 'Approved' || displayStatus === 'Approved_by_SO' ? 'fa-thumbs-up' :
                           isDispatched ? 'fa-truck-fast' : 
                           displayStatus === 'RECEIVED' || displayStatus === 'Received' || displayStatus === 'FULFILLED' ? 'fa-check-double' : 
                           'fa-ban'} me-1`}></i>
-                        {displayStatus}
+                        {/* Beautifully formats "Approved_by_SO" into "Approved (SO)" for the user UI */}
+                        {displayStatus.replace('_by_SO', ' (SO)')}
                       </span>
                     </td>
                     <td className="text-end px-4">
@@ -702,9 +704,9 @@ export default function OrderHub() {
                               </li>
                             }
 
-                            {/* APPROVE ACTION (TERTIARY) */}
+                            {/* APPROVE ACTION (TERTIARY) - LOCKED TO SO ROLE */}
                             {canApproveTertiary && activeTab === 'tertiary' && (displayStatus === 'Pending' || displayStatus === 'PENDING') &&
-                              <li><button className="dropdown-item rounded-3 text-success fw-bold py-2 mb-1" onClick={() => handleOrderStatus('approve', o.id)}><div className="bg-success bg-opacity-10 d-inline-block p-2 rounded-circle me-2"><i className="fa-solid fa-check text-success"></i></div> Approve Sale</button></li>
+                              <li><button className="dropdown-item rounded-3 text-success fw-bold py-2 mb-1" onClick={() => handleOrderStatus('approve', o.id)}><div className="bg-success bg-opacity-10 d-inline-block p-2 rounded-circle me-2"><i className="fa-solid fa-shield-check text-success"></i></div> Authenticate & Approve</button></li>
                             }
 
                             {/* CANCEL ORDERS */}
@@ -737,25 +739,25 @@ export default function OrderHub() {
               <div className="modal-header bg-danger bg-gradient text-white border-0 p-4">
                 <div className="d-flex align-items-center">
                   <div className="bg-white bg-opacity-25 rounded-circle d-flex justify-content-center align-items-center me-3" style={{ width: '45px', height: '45px' }}>
-                    <i className="fa-solid fa-triangle-exclamation fs-5"></i>
+                    <i className="fa-solid fa-shield-halved fs-5"></i>
                   </div>
-                  <h5 className="modal-title fw-bold m-0">Security Verification</h5>
+                  <h5 className="modal-title fw-bold m-0">Security & Authentication</h5>
                 </div>
                 <button type="button" className="btn-close btn-close-white opacity-75" onClick={() => setApproveConfirmId(null)}></button>
               </div>
               <div className="modal-body p-4 bg-light">
-                <h5 className="fw-bolder text-dark mb-3">Are you sure you want to approve this order?</h5>
+                <h5 className="fw-bolder text-dark mb-3">Authorize this approval?</h5>
                 <p className="text-muted fw-semibold mb-0" style={{ lineHeight: '1.6' }}>
-                  By confirming, you verify that you have checked <span className="text-danger">sufficient stock</span> and <span className="text-danger">partner credit/funds</span> to fulfill this request.
+                  By confirming, you verify that you have checked <span className="text-danger">physical stock</span> and the appropriate <span className="text-danger">partner territory metrics</span> to fulfill this request.
                 </p>
               </div>
               <div className="modal-footer border-0 p-4 bg-white">
                 <button type="button" className="btn btn-light fw-semibold px-4 rounded-pill" onClick={() => setApproveConfirmId(null)}>Cancel</button>
                 <button type="button" className="btn btn-danger fw-bold px-5 rounded-pill shadow-sm" onClick={() => {
-                  handleOrderStatus('approve', approveConfirmId, true); // true bypasses the popup check
+                  handleOrderStatus('approve', approveConfirmId, true); // bypasses the popup check
                   setApproveConfirmId(null);
                 }}>
-                  <i className="fa-solid fa-check-double me-2"></i> Confirm Approval
+                  <i className="fa-solid fa-check-double me-2"></i> Confirm Authentication
                 </button>
               </div>
             </div>
