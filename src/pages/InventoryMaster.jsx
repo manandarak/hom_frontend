@@ -6,6 +6,20 @@ export default function InventoryMaster() {
   const [activeTab, setActiveTab] = useState('factory'); // 'factory', 'ss', 'ledger'
   const [loading, setLoading] = useState(false);
 
+  // --- FIXED ROLE CHECK FOR ADMIN ---
+  let isAdmin = false;
+  try {
+    const storedUser = localStorage.getItem('user');
+    if (storedUser) {
+      const userObj = JSON.parse(storedUser);
+      // Grab the role name based on how your backend sends it (usually user.role.name)
+      const roleName = userObj?.role?.name || userObj?.role;
+      isAdmin = roleName === 'Admin';
+    }
+  } catch (e) {
+    console.error("Error parsing user role:", e);
+  }
+
   // --- HYDRATED MASTER DATA ---
   const [masterData, setMasterData] = useState({
     products: [],
@@ -30,6 +44,7 @@ export default function InventoryMaster() {
   // --- MODAL STATES ---
   const [isProduceModalOpen, setIsProduceModalOpen] = useState(false);
   const [isAdjustModalOpen, setIsAdjustModalOpen] = useState(false);
+  const [isAddFactoryModalOpen, setIsAddFactoryModalOpen] = useState(false);
 
   // Form States
   const [produceForm, setProduceForm] = useState({
@@ -41,6 +56,8 @@ export default function InventoryMaster() {
   });
 
   const [adjustForm, setAdjustForm] = useState({ entity_type: 'factory', entity_id: '1', product_id: '', quantity: '', reason: '' });
+
+  const [newFactoryName, setNewFactoryName] = useState('');
 
   // --- 1. HYDRATION ON MOUNT ---
   useEffect(() => {
@@ -214,6 +231,36 @@ export default function InventoryMaster() {
     }
   };
 
+  const handleAddFactory = async (e) => {
+    e.preventDefault();
+    const toastId = toast.loading('Registering new facility...');
+    try {
+      // NOTE: Replace this with your actual API call once the backend endpoint is ready.
+      // e.g., const res = await api.post('/factories', { name: newFactoryName });
+
+      const newId = masterData.factories.length > 0 ? Math.max(...masterData.factories.map(f => f.id)) + 1 : 1;
+      const newFactoryObj = { id: newId, name: newFactoryName };
+
+      // Update Local State for immediate UI reflection
+      setMasterData(prev => ({
+        ...prev,
+        factories: [...prev.factories, newFactoryObj]
+      }));
+
+      toast.success(`${newFactoryName} registered successfully!`, { id: toastId });
+      setIsAddFactoryModalOpen(false);
+      setNewFactoryName('');
+
+      // Auto-switch to the new factory view
+      setSelectedFactoryId(newId.toString());
+      setFactoryStock([]); // Empty stock for a new factory
+      setActiveTab('factory');
+
+    } catch (err) {
+      toast.error(`Error: ${err.response?.data?.detail || err.message}`, { id: toastId });
+    }
+  };
+
   return (
     <div className="container-fluid p-4" style={{ backgroundColor: '#f4f7f8', minHeight: '100vh' }}>
       <Toaster position="top-right" toastOptions={{ style: { borderRadius: '10px', background: '#333', color: '#fff' } }} />
@@ -227,6 +274,13 @@ export default function InventoryMaster() {
           <p className="text-muted m-0 mt-1">Monitor pipelines, log production, and audit stock levels.</p>
         </div>
         <div className="d-flex gap-2">
+          {/* ADMIN ONLY: ADD PLANT BUTTON */}
+          {isAdmin && (
+            <button className="btn btn-outline-primary shadow-sm rounded-pill px-4 fw-semibold border-2" onClick={() => setIsAddFactoryModalOpen(true)}>
+              <i className="fa-solid fa-plus me-2"></i> Add Plant
+            </button>
+          )}
+
           <button className="btn btn-dark shadow-sm rounded-pill px-4 fw-semibold" onClick={() => setIsAdjustModalOpen(true)}>
             <i className="fa-solid fa-scale-unbalanced me-2"></i> Audit / Adjust
           </button>
@@ -385,7 +439,6 @@ export default function InventoryMaster() {
                         )}
                       </td>
 
-                      {/* --- NEW VISUAL MATH FLOW --- */}
                       <td className="px-4">
                         <div className="d-flex align-items-center justify-content-between bg-light rounded-pill px-3 py-2 border shadow-sm">
                           {/* OPENING BALANCE */}
@@ -418,6 +471,43 @@ export default function InventoryMaster() {
           </div>
         )}
       </div>
+
+      {/* --- NEW MODAL: ADD FACTORY (ADMIN ONLY) --- */}
+      {isAddFactoryModalOpen && isAdmin && (
+        <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(15, 23, 42, 0.7)', backdropFilter: 'blur(5px)' }}>
+          <div className="modal-dialog modal-dialog-centered">
+            <div className="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+              <form onSubmit={handleAddFactory}>
+                <div className="modal-header bg-dark text-white border-0 p-4">
+                  <h5 className="modal-title fw-bold"><i className="fa-solid fa-industry me-2 text-primary"></i> Register New Plant</h5>
+                  <button type="button" className="btn-close btn-close-white opacity-75" onClick={() => setIsAddFactoryModalOpen(false)}></button>
+                </div>
+                <div className="modal-body p-4 bg-light">
+                  <div className="mb-3">
+                    <label className="form-label small fw-bold text-uppercase text-muted mb-1">Plant / Factory Name <span className="text-danger">*</span></label>
+                    <input
+                      type="text"
+                      className="form-control border-0 shadow-sm rounded-3 py-2 fw-semibold"
+                      required
+                      placeholder="e.g. North India Manufacturing Unit"
+                      value={newFactoryName}
+                      onChange={e => setNewFactoryName(e.target.value)}
+                    />
+                  </div>
+                  <div className="p-3 bg-primary bg-opacity-10 border border-primary border-opacity-25 rounded-3 text-dark small fw-semibold">
+                    <i className="fa-solid fa-circle-info text-primary me-2"></i>
+                    Once registered, this facility will immediately be available for logging production batches and dispatching inventory to the Super Stockist network.
+                  </div>
+                </div>
+                <div className="modal-footer border-0 p-4 bg-white">
+                  <button type="button" className="btn btn-light fw-semibold px-4 rounded-pill" onClick={() => setIsAddFactoryModalOpen(false)}>Cancel</button>
+                  <button type="submit" className="btn btn-primary fw-bold px-5 rounded-pill shadow-sm"><i className="fa-solid fa-check me-2"></i> Register Plant</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* --- MODAL: LOG PRODUCTION --- */}
       {isProduceModalOpen && (
