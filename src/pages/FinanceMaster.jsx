@@ -8,13 +8,22 @@ export default function FinanceMaster() {
   const [loading, setLoading] = useState(false);
 
   // --- STRICT RBAC EVALUATION ---
-  const isAdminOrInternal = ['Admin', 'ZSM', 'RSM', 'ASM', 'SO'].includes(user?.role);
+  const roleName = typeof user?.role === 'object' ? user?.role?.name : user?.role;
+  const userPerms = user?.permissions || [];
+  const isAdmin = roleName?.toLowerCase() === 'admin' || userPerms.includes('manage_roles');
+
+  // Drives database modification rights
+  const canManagePayments = isAdmin || userPerms.includes('manage_payments');
+
+  // Drives UI logic (Global Dashboard vs Personal Ledger)
+  const isExternalPartner = ['SuperStockist', 'Distributor', 'Retailer'].includes(roleName);
+  const isInternalTeam = !isExternalPartner;
 
   // Safely map partner role to API party_type keys
   const getPartyTypeFromRole = () => {
-      if (user?.role === 'SuperStockist') return 'ss';
-      if (user?.role === 'Distributor') return 'distributor';
-      if (user?.role === 'Retailer') return 'retailer';
+      if (roleName === 'SuperStockist') return 'ss';
+      if (roleName === 'Distributor') return 'distributor';
+      if (roleName === 'Retailer') return 'retailer';
       return 'ss'; // Default fallback for Admin
   };
   const partnerPartyType = getPartyTypeFromRole();
@@ -26,7 +35,7 @@ export default function FinanceMaster() {
     retailers: []
   });
 
-  // --- GLOBAL SUMMARY STATE (Admin Only) ---
+  // --- GLOBAL SUMMARY STATE (Internal Only) ---
   const [globalSummary, setGlobalSummary] = useState(null);
 
   // --- LEDGER STATE ---
@@ -34,7 +43,7 @@ export default function FinanceMaster() {
   const [ledgerData, setLedgerData] = useState([]);
   const [ledgerBalance, setLedgerBalance] = useState(0);
 
-  // --- MODAL & PAYMENT STATE (Admin Only) ---
+  // --- MODAL & PAYMENT STATE ---
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [paymentForm, setPaymentForm] = useState({
     party_type: 'ss',
@@ -48,7 +57,7 @@ export default function FinanceMaster() {
   // --- 1. HYDRATE DATA ON MOUNT ---
   useEffect(() => {
     fetchInitialData();
-  }, [user]);
+  }, [user, roleName]);
 
   const fetchInitialData = async () => {
     try {
@@ -69,15 +78,15 @@ export default function FinanceMaster() {
         retailers: fetchedRetailers
       });
 
-      // 2. Fetch Global Company Summary if Admin
-      if (isAdminOrInternal) {
+      // 2. Fetch Global Company Summary if Internal
+      if (isInternalTeam) {
           fetchGlobalSummary();
       } else {
           // If External Partner, auto-find their Profile ID and strictly lock their ledger
           let myProfileList = [];
-          if (user?.role === 'SuperStockist') myProfileList = fetchedSS;
-          else if (user?.role === 'Distributor') myProfileList = fetchedDistributors;
-          else if (user?.role === 'Retailer') myProfileList = fetchedRetailers;
+          if (roleName === 'SuperStockist') myProfileList = fetchedSS;
+          else if (roleName === 'Distributor') myProfileList = fetchedDistributors;
+          else if (roleName === 'Retailer') myProfileList = fetchedRetailers;
 
           if (myProfileList.length > 0) {
               const myProfileId = myProfileList[0].id.toString();
@@ -91,10 +100,10 @@ export default function FinanceMaster() {
 
   // 3. Auto-Trigger Ledger fetch for external partners once their ID is locked in
   useEffect(() => {
-     if (!isAdminOrInternal && ledgerParams.party_id) {
+     if (!isInternalTeam && ledgerParams.party_id) {
          fetchLedger();
      }
-  }, [ledgerParams.party_id, isAdminOrInternal]);
+  }, [ledgerParams.party_id, isInternalTeam]);
 
   const fetchGlobalSummary = async () => {
     try {
@@ -194,7 +203,7 @@ export default function FinanceMaster() {
   };
 
   // Determine which data to display in the table
-  const isGlobalView = !ledgerParams.party_id && isAdminOrInternal;
+  const isGlobalView = !ledgerParams.party_id && isInternalTeam;
   const tableData = isGlobalView ? (globalSummary?.recent_global_transactions || []) : ledgerData;
 
   return (
@@ -205,22 +214,23 @@ export default function FinanceMaster() {
       <div className="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-4 gap-3">
         <div>
           <h3 className="fw-bolder m-0 text-dark" style={{ letterSpacing: '-0.5px' }}>
-            <i className="fa-solid fa-indian-rupee-sign text-primary me-2"></i> {isAdminOrInternal ? 'Finance & Accounts' : 'My Account Statement'}
+            <i className="fa-solid fa-indian-rupee-sign text-primary me-2"></i> {isInternalTeam ? 'Finance & Accounts' : 'My Account Statement'}
           </h3>
           <p className="text-muted m-0 mt-1">
-            {isAdminOrInternal ? 'Manage accounts receivable, global ledgers, and log payments.' : 'View your outstanding balances and transactions.'}
+            {isInternalTeam ? 'Manage accounts receivable, global ledgers, and log payments.' : 'View your outstanding balances and transactions.'}
           </p>
         </div>
-        {/* PAYMENT BUTTON - STRICTLY ADMIN ONLY */}
-        {isAdminOrInternal && (
+
+        {/* PAYMENT BUTTON - SECURED VIA PERMISSION ARRAY */}
+        {canManagePayments && (
             <button className="btn btn-success shadow-sm rounded-pill px-4 fw-semibold btn-lg" onClick={() => setIsPaymentModalOpen(true)}>
               <i className="fa-solid fa-cash-register me-2"></i> Receive Payment
             </button>
         )}
       </div>
 
-      {/* GLOBAL KPI CARDS (Strictly Admin Only, and only when no specific partner is selected) */}
-      {isAdminOrInternal && isGlobalView && globalSummary && (
+      {/* GLOBAL KPI CARDS (Internal Team Only, and only when no specific partner is selected) */}
+      {isInternalTeam && isGlobalView && globalSummary && (
         <div className="row g-4 mb-4">
           <div className="col-md-3">
             <div className="card border-0 shadow-sm rounded-4 bg-primary text-white h-100">
@@ -258,8 +268,8 @@ export default function FinanceMaster() {
         </div>
       )}
 
-      {/* LEDGER QUERY BAR (Strictly Admin Only) */}
-      {isAdminOrInternal && (
+      {/* LEDGER QUERY BAR (Internal Team Only) */}
+      {isInternalTeam && (
           <div className="card border-0 shadow-sm rounded-4 mb-4 bg-white">
             <div className="card-body p-3">
               <form onSubmit={fetchLedger} className="row g-3 align-items-end">
@@ -303,7 +313,7 @@ export default function FinanceMaster() {
             {isGlobalView ? 'Recent Global Transactions' : 'Statement of Account'}
           </h5>
 
-          {/* Always show the Current Balance block for External Partners, or Admins viewing a specific partner */}
+          {/* Always show the Current Balance block for External Partners, or Internal viewing a specific partner */}
           {(!isGlobalView) && (
             <div className="text-end">
               <span className="small text-muted text-uppercase fw-bold me-2">Current Balance:</span>
@@ -379,8 +389,8 @@ export default function FinanceMaster() {
         </div>
       </div>
 
-      {/* --- MODAL: RECEIVE PAYMENT (Strictly Admin Only) --- */}
-      {isPaymentModalOpen && isAdminOrInternal && (
+      {/* --- MODAL: RECEIVE PAYMENT --- */}
+      {isPaymentModalOpen && canManagePayments && (
         <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(15, 23, 42, 0.6)', backdropFilter: 'blur(4px)' }}>
           <div className="modal-dialog modal-dialog-centered modal-lg">
             <div className="modal-content border-0 shadow-lg rounded-4 overflow-hidden">

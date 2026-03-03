@@ -6,10 +6,44 @@ import { AuthContext } from '../context/AuthContext';
 export default function OrderHub() {
   const { user } = useContext(AuthContext);
 
-  const defaultTab = user?.role === 'Retailer' ? 'tertiary' : user?.role === 'Distributor' ? 'secondary' : 'primary';
+  // --- BULLETPROOF RBAC EVALUATION ---
+  const roleName = typeof user?.role === 'object' ? user?.role?.name : user?.role;
+  const userPerms = user?.permissions || [];
+
+  const isAdmin = roleName?.toLowerCase() === 'admin' || userPerms.includes('manage_roles');
+
+  // Helps with UI mapping for Pre-Fills and Dropdowns (who sends what)
+  const isPartner = ['SuperStockist', 'Distributor', 'Retailer'].includes(roleName);
+
+  // --- DYNAMIC PERMISSION ARRAYS ---
+  // Viewing: Instead of string arrays, we check if they have the specific view permission
+  const canViewPrimary = isAdmin || userPerms.includes('view_all_orders') || userPerms.includes('view_own_orders');
+  const canViewSecondary = isAdmin || userPerms.includes('view_all_orders') || userPerms.includes('view_own_orders');
+  const canViewTertiary = isAdmin || userPerms.includes('view_all_orders') || userPerms.includes('view_own_orders');
+
+  // Placing Orders: Strictly locked to database permissions
+  const canPlacePrimary = isAdmin || userPerms.includes('create_primary_order');
+  const canPlaceSecondary = isAdmin || userPerms.includes('create_secondary_order');
+  const canPlaceTertiary = isAdmin || userPerms.includes('create_tertiary_order');
+
+  const canManageConsumers = isAdmin || userPerms.includes('manage_partners');
+
+  // Workflow Engines
+  const canDispatchOrder = isAdmin || userPerms.includes('dispatch_order');
+  const canReceiveOrder = isAdmin || userPerms.includes('receive_order');
+  const canApproveOrder = isAdmin || userPerms.includes('approve_order');
+  const canCancelOrder = isAdmin || userPerms.includes('cancel_order');
+
+  // Intelligent Default Tab
+  const defaultTab = roleName === 'Retailer' ? 'tertiary' : roleName === 'Distributor' ? 'secondary' : 'primary';
   const [activeTab, setActiveTab] = useState(defaultTab);
   const [loading, setLoading] = useState(false);
   const [openDropdownId, setOpenDropdownId] = useState(null);
+
+  const canPlaceOrderInCurrentTab =
+    (activeTab === 'primary' && canPlacePrimary) ||
+    (activeTab === 'secondary' && canPlaceSecondary) ||
+    (activeTab === 'tertiary' && canPlaceTertiary);
 
   useEffect(() => {
     const handleClickOutside = () => setOpenDropdownId(null);
@@ -54,26 +88,6 @@ export default function OrderHub() {
     }
     return errorMsg;
   };
-
-  // --- STRICT HIERARCHICAL RBAC PERMISSIONS ---
-  const isAdmin = user?.role === 'Admin';
-  const isPartner = ['SuperStockist', 'Distributor', 'Retailer'].includes(user?.role);
-
-  // Viewing: Internal teams can view all pipelines, Partners view their adjacent pipelines.
-  const canViewPrimary = isAdmin || ['ZSM', 'RSM', 'ASM', 'SO', 'SuperStockist', 'Distributor'].includes(user?.role);
-  const canViewSecondary = isAdmin || ['ZSM', 'RSM', 'ASM', 'SO', 'Distributor', 'Retailer'].includes(user?.role);
-  const canViewTertiary = isAdmin || ['ZSM', 'RSM', 'ASM', 'SO', 'Retailer'].includes(user?.role);
-
-  // Placing Orders: Strictly locked to their organizational level
-  const canPlacePrimary = isAdmin || user?.role === 'SuperStockist' || user?.role === 'ZSM';
-  const canPlaceSecondary = isAdmin || user?.role === 'Distributor' || ['RSM', 'ASM'].includes(user?.role);
-  const canPlaceTertiary = isAdmin || user?.role === 'Retailer' || user?.role === 'SO';
-  const canManageConsumers = isAdmin || user?.role === 'Retailer' || user?.role === 'SO';
-
-  const canPlaceOrderInCurrentTab =
-    (activeTab === 'primary' && canPlacePrimary) ||
-    (activeTab === 'secondary' && canPlaceSecondary) ||
-    (activeTab === 'tertiary' && canPlaceTertiary);
 
   useEffect(() => {
     const fetchMasterData = async () => {
@@ -336,7 +350,7 @@ export default function OrderHub() {
       payload = {
         end_consumer_id: parseInt(orderForm.to_id),
         fulfilled_by_retailer_id: parseInt(orderForm.from_id),
-        assigned_so_id: 1,
+        assigned_so_id: 1, // Optional: You can make this dynamic if needed
         product_id: parseInt(orderForm.product_id),
         quantity: parseInt(orderForm.quantity),
         batch_number: orderForm.batch_number
@@ -428,7 +442,7 @@ export default function OrderHub() {
               // Pre-fill "from_id" for partners and disable the dropdown later
               let prefillFromId = '';
               if (isPartner) {
-                  const partnerList = user?.role === 'SuperStockist' ? masterData.ss : user?.role === 'Distributor' ? masterData.distributors : masterData.retailers;
+                  const partnerList = roleName === 'SuperStockist' ? masterData.ss : roleName === 'Distributor' ? masterData.distributors : masterData.retailers;
                   if (partnerList.length > 0) prefillFromId = partnerList[0].id.toString();
               }
               setOrderForm({ from_id: prefillFromId, to_id: '', product_id: '', quantity: '', batch_number: '' });
@@ -572,21 +586,16 @@ export default function OrderHub() {
 
                   const displayStatus = o.status || 'LOGGED';
                   const isDispatched = (displayStatus === 'DISPATCHED' || displayStatus === 'Dispatched');
+                  const isPending = (displayStatus === 'Pending' || displayStatus === 'PENDING');
+                  const isApproved = (displayStatus === 'APPROVED' || displayStatus === 'Approved' || displayStatus === 'Approved_by_SO');
 
-                  const canDispatchPrimary = isAdmin || (activeTab === 'primary' && user?.role === 'SuperStockist');
-                  const canReceivePrimary = isAdmin || (activeTab === 'primary' && ['SuperStockist', 'Distributor'].includes(user?.role));
+                  // --- SECURED WORKFLOW ENGINES VIA PERMISSIONS ---
+                  const showApprove = canApproveOrder && isPending && (activeTab === 'secondary' || activeTab === 'tertiary');
+                  const showDispatch = canDispatchOrder && ((activeTab === 'primary' && isPending) || (activeTab === 'secondary' && isApproved));
+                  const showReceive = canReceiveOrder && isDispatched && (activeTab === 'primary' || activeTab === 'secondary');
+                  const showCancel = canCancelOrder && !isDispatched && (isPending || isApproved);
 
-                  const canApproveSecondary = isAdmin || (activeTab === 'secondary' && user?.role === 'Distributor');
-                  const canDispatchSecondary = isAdmin || (activeTab === 'secondary' && user?.role === 'Distributor');
-                  const canReceiveSecondary = isAdmin || (activeTab === 'secondary' && user?.role === 'Retailer');
-
-                  // STRICT ENFORCEMENT: Only the SO role can view/click the Authenticate & Approve button
-                  const canApproveTertiary = activeTab === 'tertiary' && (user?.role === 'SO' || isAdmin);
-
-                  const needsAction =
-                    (displayStatus === 'Pending' || displayStatus === 'PENDING') ||
-                    (displayStatus === 'APPROVED' || displayStatus === 'Approved') ||
-                    isDispatched;
+                  const needsAction = showApprove || showDispatch || showReceive || showCancel || isDispatched;
 
                   return (
                   <tr key={o.id}>
@@ -619,15 +628,15 @@ export default function OrderHub() {
                     </td>
                     <td>
                       <span className={`badge rounded-pill px-3 py-2 text-uppercase shadow-sm border ${
-                        displayStatus === 'Pending' || displayStatus === 'PENDING' ? 'bg-warning bg-opacity-10 text-warning border-warning border-opacity-50' :
-                        displayStatus === 'APPROVED' || displayStatus === 'Approved' || displayStatus === 'Approved_by_SO' ? 'bg-primary bg-opacity-10 text-primary border-primary border-opacity-50' :
+                        isPending ? 'bg-warning bg-opacity-10 text-warning border-warning border-opacity-50' :
+                        isApproved ? 'bg-primary bg-opacity-10 text-primary border-primary border-opacity-50' :
                         isDispatched ? 'bg-info bg-opacity-10 text-info border-info border-opacity-50' :
                         displayStatus === 'RECEIVED' || displayStatus === 'Received' || displayStatus === 'FULFILLED' ? 'bg-success bg-opacity-10 text-success border-success border-opacity-50' :
                         displayStatus === 'CANCELLED' || displayStatus === 'Cancelled' ? 'bg-danger bg-opacity-10 text-danger border-danger border-opacity-50' : 'bg-secondary bg-opacity-10 text-secondary border-secondary border-opacity-50'
                       }`}>
                         <i className={`fa-solid ${
-                          displayStatus === 'Pending' || displayStatus === 'PENDING' ? 'fa-clock' : 
-                          displayStatus === 'APPROVED' || displayStatus === 'Approved' || displayStatus === 'Approved_by_SO' ? 'fa-thumbs-up' :
+                          isPending ? 'fa-clock' : 
+                          isApproved ? 'fa-thumbs-up' :
                           isDispatched ? 'fa-truck-fast' : 
                           displayStatus === 'RECEIVED' || displayStatus === 'Received' || displayStatus === 'FULFILLED' ? 'fa-check-double' : 
                           'fa-ban'} me-1`}></i>
@@ -653,19 +662,20 @@ export default function OrderHub() {
                             className={`dropdown-menu dropdown-menu-end shadow-lg border-0 rounded-4 mt-1 p-2 ${openDropdownId === o.id ? 'show' : ''}`}
                             style={{ position: 'absolute', right: 0, top: '100%', zIndex: 1050 }}
                           >
-                            {/* APPROVE ACTION (SECONDARY) */}
-                            {canApproveSecondary && activeTab === 'secondary' && (displayStatus === 'Pending' || displayStatus === 'PENDING') &&
+                            {/* APPROVE ACTION (SECONDARY OR TERTIARY) */}
+                            {showApprove &&
                               <li>
                                 <button className="dropdown-item rounded-3 text-primary fw-bold py-2 mb-1" onClick={() => handleOrderStatus('approve', o.id)}>
-                                  <div className="bg-primary bg-opacity-10 d-inline-block p-2 rounded-circle me-2"><i className="fa-solid fa-thumbs-up text-primary"></i></div>
-                                  Approve Order
+                                  <div className="bg-primary bg-opacity-10 d-inline-block p-2 rounded-circle me-2">
+                                    <i className={`fa-solid ${activeTab === 'tertiary' ? 'fa-shield-check' : 'fa-thumbs-up'} text-primary`}></i>
+                                  </div>
+                                  {activeTab === 'tertiary' ? 'Authenticate & Approve' : 'Approve Order'}
                                 </button>
                               </li>
                             }
 
                             {/* DISPATCH ACTION */}
-                            {((canDispatchPrimary && activeTab === 'primary' && (displayStatus === 'Pending' || displayStatus === 'PENDING')) ||
-                              (canDispatchSecondary && activeTab === 'secondary' && (displayStatus === 'APPROVED' || displayStatus === 'Approved'))) &&
+                            {showDispatch &&
                               <li>
                                 <button className="dropdown-item rounded-3 text-info fw-bold py-2 mb-1"
                                   onClick={() => {
@@ -686,7 +696,7 @@ export default function OrderHub() {
                               </li>
                             }
 
-                            {/* VIEW DISPATCH DETAILS */}
+                            {/* VIEW DISPATCH DETAILS (Visible to all who can see the order) */}
                             {isDispatched && o.shipment && (
                               <li>
                                 <button className="dropdown-item rounded-3 text-primary fw-bold py-2 mb-1"
@@ -702,8 +712,7 @@ export default function OrderHub() {
                             )}
 
                             {/* RECEIVE ACTION */}
-                            {((canReceivePrimary && activeTab === 'primary' && isDispatched) ||
-                              (canReceiveSecondary && activeTab === 'secondary' && isDispatched)) &&
+                            {showReceive &&
                               <li>
                                 <button className="dropdown-item rounded-3 text-success fw-bold py-2 mb-1" onClick={() => handleOrderStatus('receive', o.id)}>
                                   <div className="bg-success bg-opacity-10 d-inline-block p-2 rounded-circle me-2"><i className="fa-solid fa-box-open text-success"></i></div>
@@ -712,13 +721,8 @@ export default function OrderHub() {
                               </li>
                             }
 
-                            {/* APPROVE ACTION (TERTIARY) - LOCKED TO SO ROLE */}
-                            {canApproveTertiary && activeTab === 'tertiary' && (displayStatus === 'Pending' || displayStatus === 'PENDING') &&
-                              <li><button className="dropdown-item rounded-3 text-success fw-bold py-2 mb-1" onClick={() => handleOrderStatus('approve', o.id)}><div className="bg-success bg-opacity-10 d-inline-block p-2 rounded-circle me-2"><i className="fa-solid fa-shield-check text-success"></i></div> Authenticate & Approve</button></li>
-                            }
-
                             {/* CANCEL ORDERS */}
-                            {(!isDispatched) && (
+                            {showCancel && (
                               <>
                                 <li><hr className="dropdown-divider opacity-10 m-1" /></li>
                                 <li><button className="dropdown-item rounded-3 text-danger fw-bold py-2" onClick={() => handleOrderStatus('cancel', o.id)}><i className="fa-solid fa-ban text-danger me-3 ms-1"></i> Abort / Cancel</button></li>

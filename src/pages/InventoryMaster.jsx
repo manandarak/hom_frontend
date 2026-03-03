@@ -4,15 +4,24 @@ import toast, { Toaster } from 'react-hot-toast';
 import { AuthContext } from '../context/AuthContext';
 
 export default function InventoryMaster() {
-  const [activeTab, setActiveTab] = useState('factory'); // 'factory', 'ss', 'ledger'
-  const [loading, setLoading] = useState(false);
+  const { user } = useContext(AuthContext);
 
   // --- BULLETPROOF RBAC LOGIC ---
-  const { user } = useContext(AuthContext);
   const roleName = typeof user?.role === 'object' ? user?.role?.name : user?.role;
-  const isAdmin = roleName?.toLowerCase() === 'admin';
   const userPerms = user?.permissions || [];
+
+  // Drives database execution (Can they click the Add/Produce/Adjust buttons?)
+  const isAdmin = roleName?.toLowerCase() === 'admin' || userPerms.includes('manage_roles');
   const canManageInventory = isAdmin || userPerms.includes('manage_inventory');
+
+  // UI Layout drivers (Who sees what tab by default)
+  const isExternalPartner = ['SuperStockist', 'Distributor', 'Retailer'].includes(roleName);
+  const isInternalTeam = !isExternalPartner;
+
+  // Set default tab safely based on role
+  const defaultTab = isInternalTeam ? 'factory' : roleName === 'SuperStockist' ? 'ss' : 'distributor';
+  const [activeTab, setActiveTab] = useState(defaultTab);
+  const [loading, setLoading] = useState(false);
 
   // --- HYDRATED MASTER DATA ---
   const [masterData, setMasterData] = useState({
@@ -20,19 +29,17 @@ export default function InventoryMaster() {
     ss: [],
     distributors: [],
     retailers: [],
-    factories: [
-      { id: 1, name: 'Main Assembly Plant (HQ)' },
-      { id: 2, name: 'Secondary Manufacturing Unit' }
-    ]
+    factories: []
   });
 
   // --- CORE DATA STATES ---
   const [factoryStock, setFactoryStock] = useState([]);
   const [ssStock, setSsStock] = useState([]);
+  const [externalStock, setExternalStock] = useState([]); // For external partners
   const [ledger, setLedger] = useState([]);
 
-  // Selections for viewing data
-  const [selectedFactoryId, setSelectedFactoryId] = useState('1');
+  // Selections for viewing data (Internal Only)
+  const [selectedFactoryId, setSelectedFactoryId] = useState('');
   const [selectedSsId, setSelectedSsId] = useState('');
 
   // --- MODAL STATES ---
@@ -42,42 +49,65 @@ export default function InventoryMaster() {
 
   // Form States
   const [produceForm, setProduceForm] = useState({
-    factory_id: '1',
+    factory_id: '',
     product_id: '',
     quantity_produced: '',
     batch_number: '',
     production_date: new Date().toISOString().split('T')[0]
   });
 
-  const [adjustForm, setAdjustForm] = useState({ entity_type: 'factory', entity_id: '1', product_id: '', quantity: '', reason: '' });
-
+  const [adjustForm, setAdjustForm] = useState({ entity_type: 'factory', entity_id: '', product_id: '', quantity: '', reason: '' });
   const [newFactoryName, setNewFactoryName] = useState('');
 
   // --- 1. HYDRATION ON MOUNT ---
   useEffect(() => {
     const fetchMasterData = async () => {
       try {
-        const [prodRes, ssRes, distRes, retRes] = await Promise.all([
+        const [prodRes, ssRes, distRes, retRes, facRes] = await Promise.all([
           api.get('/products').catch(() => ({ data: [] })),
           api.get('/partners/super-stockists').catch(() => ({ data: [] })),
           api.get('/partners/distributors').catch(() => ({ data: [] })),
-          api.get('/partners/retailers').catch(() => ({ data: [] }))
+          api.get('/partners/retailers').catch(() => ({ data: [] })),
+          api.get('/inventory/factories').catch(() => ({ data: [] }))
         ]);
+
+        const fetchedFactories = Array.isArray(facRes.data) ? facRes.data : facRes.data?.items || [];
+        const fetchedSS = Array.isArray(ssRes.data) ? ssRes.data : ssRes.data?.items || [];
+        const fetchedDistributors = Array.isArray(distRes.data) ? distRes.data : distRes.data?.items || [];
 
         setMasterData(prev => ({
           ...prev,
           products: Array.isArray(prodRes.data) ? prodRes.data : prodRes.data?.items || [],
-          ss: Array.isArray(ssRes.data) ? ssRes.data : ssRes.data?.items || [],
-          distributors: Array.isArray(distRes.data) ? distRes.data : distRes.data?.items || [],
-          retailers: Array.isArray(retRes.data) ? retRes.data : retRes.data?.items || []
+          ss: fetchedSS,
+          distributors: fetchedDistributors,
+          retailers: Array.isArray(retRes.data) ? retRes.data : retRes.data?.items || [],
+          factories: fetchedFactories
         }));
+
+        // --- AUTO-LOAD LOGIC BASED ON ROLE ---
+        if (isInternalTeam) {
+            // Internal team auto-loads the first factory
+            if (fetchedFactories.length > 0) {
+                const firstFacId = fetchedFactories[0].id.toString();
+                setSelectedFactoryId(firstFacId);
+                setProduceForm(prev => ({...prev, factory_id: firstFacId}));
+                setAdjustForm(prev => ({...prev, entity_id: firstFacId}));
+                fetchFactoryStock(firstFacId);
+            }
+        } else {
+            // External Partner auto-loads ONLY their own inventory
+            const partnerList = roleName === 'SuperStockist' ? fetchedSS : fetchedDistributors;
+            if (partnerList.length > 0) {
+                fetchExternalStock(roleName === 'SuperStockist' ? 'ss' : 'distributor', partnerList[0].id);
+            }
+        }
+
       } catch (err) {
         console.error("Hydration failed", err);
       }
     };
     fetchMasterData();
-    fetchFactoryStock('1');
-  }, []);
+  }, [isInternalTeam, roleName]);
 
   // --- TRANSLATORS ---
   const getProductName = (id) => {
@@ -87,9 +117,7 @@ export default function InventoryMaster() {
 
   const getEntityName = (type, id) => {
     if (!type || !id) return `Unknown Entity #${id}`;
-
     const safeType = type.toLowerCase();
-
     if (safeType === 'factory') {
       const f = masterData.factories.find(x => x.id === parseInt(id));
       return f ? f.name : `Factory #${id}`;
@@ -106,13 +134,11 @@ export default function InventoryMaster() {
       const r = masterData.retailers.find(x => x.id === parseInt(id));
       return r ? r.name || r.firm_name || r.shop_name : `Retailer #${id}`;
     }
-
     return `${type.charAt(0).toUpperCase() + type.slice(1).toLowerCase()} #${id}`;
   };
 
   const getMovementVector = (txType, entityType) => {
     const t = txType ? txType.toUpperCase() : '';
-
     if (t === 'PRODUCTION') return { text: '🏭 Factory Production', badge: 'bg-dark text-white' };
     if (t === 'DISPATCH_OUT_FACTORY') return { text: '🏭 Factory ➝ 🚚 Transit', badge: 'bg-primary text-white shadow-sm' };
     if (t === 'DISPATCH_IN_TRANSIT') return { text: '🚚 Entered Logistics Network', badge: 'bg-secondary text-white' };
@@ -122,10 +148,8 @@ export default function InventoryMaster() {
     if (t.includes('SEC_DISPATCH_OUT') || t.includes('SECONDARY_SALE_OUT')) return { text: '🏢 Distributor ➝ 🚚 Van Dispatch', badge: 'bg-warning text-dark fw-bold shadow-sm' };
     if (t.includes('SEC_RECEIVE_IN') || t.includes('SECONDARY_SALE_IN')) return { text: '🚚 Arrived at 🏪 Retailer', badge: 'bg-success text-white shadow-sm' };
     if (t === 'RETAIL_SALE') return { text: '🏪 Retailer ➝ 💈 Barber / Consumer', badge: 'bg-success bg-gradient text-white shadow-sm' };
-
     if (t.includes('CANCEL')) return { text: `↩️ Reverted Stock (${entityType})`, badge: 'bg-danger text-white' };
     if (t === 'ADJUSTMENT') return { text: `⚖️ Audit Adjustment (${entityType})`, badge: 'bg-light text-dark border border-secondary border-opacity-50' };
-
     return { text: `🔄 ${t || 'UNKNOWN'}`, badge: 'bg-light text-dark border border-secondary border-opacity-50' };
   };
 
@@ -137,9 +161,8 @@ export default function InventoryMaster() {
     try {
       const res = await api.get(`/inventory/factory/${id}`);
       setFactoryStock(Array.isArray(res.data) ? res.data : res.data.items || []);
-    } catch (err) {
-      setFactoryStock([]);
-    } finally { setLoading(false); }
+    } catch (err) { setFactoryStock([]); }
+    finally { setLoading(false); }
   };
 
   const fetchSsStock = async (id) => {
@@ -149,9 +172,17 @@ export default function InventoryMaster() {
     try {
       const res = await api.get(`/inventory/ss/${id}`);
       setSsStock(Array.isArray(res.data) ? res.data : res.data.items || []);
-    } catch (err) {
-      setSsStock([]);
-    } finally { setLoading(false); }
+    } catch (err) { setSsStock([]); }
+    finally { setLoading(false); }
+  };
+
+  const fetchExternalStock = async (tier, id) => {
+    setLoading(true);
+    try {
+      const res = await api.get(`/inventory/${tier}/${id}`);
+      setExternalStock(Array.isArray(res.data) ? res.data : res.data.items || []);
+    } catch (err) { setExternalStock([]); }
+    finally { setLoading(false); }
   };
 
   const fetchLedger = async () => {
@@ -159,17 +190,16 @@ export default function InventoryMaster() {
     try {
       const res = await api.get('/inventory/ledger');
       setLedger(Array.isArray(res.data) ? res.data : res.data.logs || res.data || []);
-    } catch (err) {
-      toast.error("Failed to load audit ledger.");
-    } finally { setLoading(false); }
+    } catch (err) { toast.error("Failed to load audit ledger."); }
+    finally { setLoading(false); }
   };
 
   useEffect(() => {
-    if (activeTab === 'ledger') fetchLedger();
-  }, [activeTab]);
+    if (activeTab === 'ledger' && isInternalTeam) fetchLedger();
+  }, [activeTab, isInternalTeam]);
 
 
-  // --- MUTATIONS ---
+  // --- MUTATIONS (MANAGEMENT PERMISSION ONLY) ---
   const handleProduce = async (e) => {
     e.preventDefault();
     const toastId = toast.loading('Minting new stock...');
@@ -185,13 +215,7 @@ export default function InventoryMaster() {
       toast.success('Production successfully logged!', { id: toastId });
       setIsProduceModalOpen(false);
 
-      setProduceForm({
-        factory_id: produceForm.factory_id,
-        product_id: '',
-        quantity_produced: '',
-        batch_number: '',
-        production_date: new Date().toISOString().split('T')[0]
-      });
+      setProduceForm({ ...produceForm, product_id: '', quantity_produced: '', batch_number: '', production_date: new Date().toISOString().split('T')[0] });
 
       if (activeTab === 'factory' && selectedFactoryId === produceForm.factory_id) {
           fetchFactoryStock(produceForm.factory_id);
@@ -229,25 +253,20 @@ export default function InventoryMaster() {
     e.preventDefault();
     const toastId = toast.loading('Registering new facility...');
     try {
-      // NOTE: Replace this with your actual API call once the backend endpoint is ready.
-      // e.g., const res = await api.post('/factories', { name: newFactoryName });
+      const res = await api.post('/inventory/factories', { name: newFactoryName });
+      const newFactoryObj = res.data;
 
-      const newId = masterData.factories.length > 0 ? Math.max(...masterData.factories.map(f => f.id)) + 1 : 1;
-      const newFactoryObj = { id: newId, name: newFactoryName };
-
-      // Update Local State for immediate UI reflection
-      setMasterData(prev => ({
-        ...prev,
-        factories: [...prev.factories, newFactoryObj]
-      }));
+      setMasterData(prev => ({ ...prev, factories: [...prev.factories, newFactoryObj] }));
 
       toast.success(`${newFactoryName} registered successfully!`, { id: toastId });
       setIsAddFactoryModalOpen(false);
       setNewFactoryName('');
 
-      // Auto-switch to the new factory view
-      setSelectedFactoryId(newId.toString());
-      setFactoryStock([]); // Empty stock for a new factory
+      const newId = newFactoryObj.id.toString();
+      setSelectedFactoryId(newId);
+      setProduceForm(prev => ({...prev, factory_id: newId}));
+      setAdjustForm(prev => ({...prev, entity_id: newId}));
+      setFactoryStock([]);
       setActiveTab('factory');
 
     } catch (err) {
@@ -263,73 +282,74 @@ export default function InventoryMaster() {
       <div className="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-4 gap-3">
         <div>
           <h3 className="fw-bolder m-0 text-dark" style={{ letterSpacing: '-0.5px' }}>
-            <i className="fa-solid fa-boxes-packing text-primary me-2"></i> Inventory Control
+            <i className="fa-solid fa-boxes-packing text-primary me-2"></i>
+            {isInternalTeam ? 'Inventory Control' : 'My Inventory'}
           </h3>
-          <p className="text-muted m-0 mt-1">Monitor pipelines, log production, and audit stock levels.</p>
+          <p className="text-muted m-0 mt-1">
+            {isInternalTeam ? 'Monitor pipelines, log production, and audit stock levels.' : 'View real-time stock quantities available for dispatch.'}
+          </p>
         </div>
-        <div className="d-flex gap-2">
-          {/* ADMIN ONLY: ADD PLANT BUTTON */}
-          {isAdmin && (
+
+        {/* ACTION BUTTONS (SECURED VIA PERMISSION ARRAY) */}
+        {canManageInventory && (
+          <div className="d-flex gap-2">
             <button className="btn btn-outline-primary shadow-sm rounded-pill px-4 fw-semibold border-2" onClick={() => setIsAddFactoryModalOpen(true)}>
               <i className="fa-solid fa-plus me-2"></i> Add Plant
             </button>
-          )}
-
-          {/* REQUIRE PERMISSION FOR INVENTORY CHANGES */}
-          {canManageInventory && (
-            <>
-              <button className="btn btn-dark shadow-sm rounded-pill px-4 fw-semibold" onClick={() => setIsAdjustModalOpen(true)}>
-                <i className="fa-solid fa-scale-unbalanced me-2"></i> Audit / Adjust
-              </button>
-              <button className="btn btn-primary shadow-sm rounded-pill px-4 fw-semibold" onClick={() => setIsProduceModalOpen(true)}>
-                <i className="fa-solid fa-industry me-2"></i> Log Production
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* TIER NAVIGATION */}
-      <div className="card border-0 shadow-sm rounded-4 mb-4 bg-white">
-        <div className="card-body p-3 d-flex flex-column flex-md-row justify-content-between align-items-center gap-3">
-          <div className="nav nav-pills p-1 bg-light rounded-pill d-inline-flex w-100 w-md-auto">
-            <button className={`nav-link rounded-pill flex-grow-1 px-4 ${activeTab === 'factory' ? 'active shadow-sm fw-bold' : 'text-dark fw-semibold'}`} onClick={() => setActiveTab('factory')}>
-              <i className="fa-solid fa-industry me-2"></i> Factory Stock
+            <button className="btn btn-dark shadow-sm rounded-pill px-4 fw-semibold" onClick={() => setIsAdjustModalOpen(true)}>
+              <i className="fa-solid fa-scale-unbalanced me-2"></i> Audit / Adjust
             </button>
-            <button className={`nav-link rounded-pill flex-grow-1 px-4 ${activeTab === 'ss' ? 'active shadow-sm fw-bold' : 'text-dark fw-semibold'}`} onClick={() => setActiveTab('ss')}>
-              <i className="fa-solid fa-warehouse me-2"></i> Super Stockists
-            </button>
-            <button className={`nav-link rounded-pill flex-grow-1 px-4 ${activeTab === 'ledger' ? 'active shadow-sm fw-bold bg-dark text-white' : 'text-dark fw-semibold'}`} onClick={() => setActiveTab('ledger')}>
-              <i className="fa-solid fa-book-journal-whills me-2"></i> Global Ledger
+            <button className="btn btn-primary shadow-sm rounded-pill px-4 fw-semibold" onClick={() => setIsProduceModalOpen(true)}>
+              <i className="fa-solid fa-industry me-2"></i> Log Production
             </button>
           </div>
-
-          {activeTab === 'factory' && (
-             <div className="input-group shadow-sm rounded-pill overflow-hidden w-auto" style={{ minWidth: '350px' }}>
-                <span className="input-group-text bg-primary bg-opacity-10 border-0 ps-4 text-primary fw-bold"><i className="fa-solid fa-industry me-2"></i> View:</span>
-                <select className="form-select border-0 bg-light py-2 shadow-none fw-semibold" value={selectedFactoryId} onChange={(e) => fetchFactoryStock(e.target.value)}>
-                  {masterData.factories.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-                </select>
-             </div>
-          )}
-
-          {activeTab === 'ss' && (
-             <div className="input-group shadow-sm rounded-pill overflow-hidden w-auto" style={{ minWidth: '350px' }}>
-                <span className="input-group-text bg-success bg-opacity-10 border-0 ps-4 text-success fw-bold"><i className="fa-solid fa-warehouse me-2"></i> View SS:</span>
-                <select className="form-select border-0 bg-light py-2 shadow-none fw-semibold" value={selectedSsId} onChange={(e) => fetchSsStock(e.target.value)}>
-                  <option value="" disabled>Select a Super Stockist...</option>
-                  {masterData.ss.map(ss => <option key={ss.id} value={ss.id}>{ss.firm_name || ss.name}</option>)}
-                </select>
-             </div>
-          )}
-        </div>
+        )}
       </div>
+
+      {/* TIER NAVIGATION (INTERNAL TEAMS ONLY) */}
+      {isInternalTeam && (
+        <div className="card border-0 shadow-sm rounded-4 mb-4 bg-white">
+          <div className="card-body p-3 d-flex flex-column flex-md-row justify-content-between align-items-center gap-3">
+            <div className="nav nav-pills p-1 bg-light rounded-pill d-inline-flex w-100 w-md-auto">
+              <button className={`nav-link rounded-pill flex-grow-1 px-4 ${activeTab === 'factory' ? 'active shadow-sm fw-bold' : 'text-dark fw-semibold'}`} onClick={() => setActiveTab('factory')}>
+                <i className="fa-solid fa-industry me-2"></i> Factory Stock
+              </button>
+              <button className={`nav-link rounded-pill flex-grow-1 px-4 ${activeTab === 'ss' ? 'active shadow-sm fw-bold' : 'text-dark fw-semibold'}`} onClick={() => setActiveTab('ss')}>
+                <i className="fa-solid fa-warehouse me-2"></i> Super Stockists
+              </button>
+              <button className={`nav-link rounded-pill flex-grow-1 px-4 ${activeTab === 'ledger' ? 'active shadow-sm fw-bold bg-dark text-white' : 'text-dark fw-semibold'}`} onClick={() => setActiveTab('ledger')}>
+                <i className="fa-solid fa-book-journal-whills me-2"></i> Global Ledger
+              </button>
+            </div>
+
+            {activeTab === 'factory' && (
+              <div className="input-group shadow-sm rounded-pill overflow-hidden w-auto" style={{ minWidth: '350px' }}>
+                  <span className="input-group-text bg-primary bg-opacity-10 border-0 ps-4 text-primary fw-bold"><i className="fa-solid fa-industry me-2"></i> View:</span>
+                  <select className="form-select border-0 bg-light py-2 shadow-none fw-semibold" value={selectedFactoryId} onChange={(e) => fetchFactoryStock(e.target.value)}>
+                    {masterData.factories.length === 0 && <option value="" disabled>No factories registered</option>}
+                    {masterData.factories.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+                  </select>
+              </div>
+            )}
+
+            {activeTab === 'ss' && (
+              <div className="input-group shadow-sm rounded-pill overflow-hidden w-auto" style={{ minWidth: '350px' }}>
+                  <span className="input-group-text bg-success bg-opacity-10 border-0 ps-4 text-success fw-bold"><i className="fa-solid fa-warehouse me-2"></i> View SS:</span>
+                  <select className="form-select border-0 bg-light py-2 shadow-none fw-semibold" value={selectedSsId} onChange={(e) => fetchSsStock(e.target.value)}>
+                    <option value="" disabled>Select a Super Stockist...</option>
+                    {masterData.ss.map(ss => <option key={ss.id} value={ss.id}>{ss.firm_name || ss.name}</option>)}
+                  </select>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* DYNAMIC CONTENT AREA */}
       <div className="card border-0 shadow-sm rounded-4 overflow-hidden bg-white">
 
-        {/* FACTORY & SS TABLES */}
-        {(activeTab === 'factory' || activeTab === 'ss') && (
+        {/* FACTORY, SS, OR EXTERNAL STOCK TABLES */}
+        {activeTab !== 'ledger' && (
           <div className="table-responsive">
             <table className="table table-hover align-middle mb-0">
               <thead className="bg-light">
@@ -342,8 +362,16 @@ export default function InventoryMaster() {
               </thead>
               <tbody>
                 {(() => {
-                  const currentList = activeTab === 'factory' ? factoryStock : ssStock;
-                  const isReady = activeTab === 'factory' ? selectedFactoryId : selectedSsId;
+                  let currentList = [];
+                  let isReady = false;
+
+                  if (isInternalTeam) {
+                      currentList = activeTab === 'factory' ? factoryStock : ssStock;
+                      isReady = activeTab === 'factory' ? selectedFactoryId : selectedSsId;
+                  } else {
+                      currentList = externalStock;
+                      isReady = true; // External user is naturally mapped
+                  }
 
                   if (loading) return <tr><td colSpan="4" className="text-center py-5"><div className="spinner-border text-primary"></div></td></tr>;
                   if (!isReady) return <tr><td colSpan="4" className="text-center py-5 text-muted"><i className="fa-solid fa-hand-pointer fs-2 mb-3 opacity-25 d-block"></i> Select an entity from the dropdown above.</td></tr>;
@@ -377,8 +405,8 @@ export default function InventoryMaster() {
           </div>
         )}
 
-        {/* --- UPDATED LEDGER TABLE WITH OPENING/CLOSING FLOW --- */}
-        {activeTab === 'ledger' && (
+        {/* --- GLOBAL LEDGER TABLE (INTERNAL TEAMS ONLY) --- */}
+        {activeTab === 'ledger' && isInternalTeam && (
           <div className="table-responsive">
             <table className="table table-hover align-middle mb-0">
               <thead className="bg-dark text-white">
@@ -397,10 +425,9 @@ export default function InventoryMaster() {
 
                   const vector = getMovementVector(log.transaction_type, log.entity_type);
 
-                  // --- MATH LOGIC ---
                   const delta = log.quantity_change ?? log.quantity ?? 0;
                   const closing = log.closing_balance !== undefined && log.closing_balance !== null ? log.closing_balance : 0;
-                  const opening = closing - delta; // Calculate Opening Balance!
+                  const opening = closing - delta;
                   const isPositive = delta > 0;
 
                   return (
@@ -413,13 +440,11 @@ export default function InventoryMaster() {
                           {new Date(log.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
                         </div>
                       </td>
-
                       <td>
                         <code className="bg-light text-dark px-2 py-1 rounded border shadow-sm fw-bold">
                           {log.reference_document || `TXN-${log.id}`}
                         </code>
                       </td>
-
                       <td>
                         <span className={`badge rounded-pill px-3 py-2 ${vector.badge}`}>
                           {vector.text}
@@ -428,7 +453,6 @@ export default function InventoryMaster() {
                           Owner: {getEntityName(log.entity_type, log.entity_id)}
                         </div>
                       </td>
-
                       <td>
                         <div className="fw-bolder text-dark mb-1">{getProductName(log.product_id)}</div>
                         {log.batch_number && (
@@ -437,26 +461,18 @@ export default function InventoryMaster() {
                           </span>
                         )}
                       </td>
-
                       <td className="px-4">
                         <div className="d-flex align-items-center justify-content-between bg-light rounded-pill px-3 py-2 border shadow-sm">
-                          {/* OPENING BALANCE */}
                           <div className="text-center" style={{ minWidth: '40px' }} title="Opening Balance">
                              <span className="text-muted fw-bold small">{opening}</span>
                           </div>
-
                           <i className="fa-solid fa-arrow-right mx-2 text-muted opacity-50"></i>
-
-                          {/* DELTA (CHANGE) */}
                           <div className="text-center" style={{ minWidth: '60px' }}>
                             <span className={`badge rounded-pill fs-6 px-3 shadow-sm ${isPositive ? 'bg-success' : 'bg-danger'}`} title="Quantity Change">
                               {isPositive ? '+' : ''}{delta}
                             </span>
                           </div>
-
                           <i className="fa-solid fa-arrow-right mx-2 text-muted opacity-50"></i>
-
-                          {/* CLOSING BALANCE */}
                           <div className="text-center" style={{ minWidth: '40px' }} title="Closing Balance">
                             <span className="text-dark fw-bolder fs-5">{closing}</span>
                           </div>
@@ -471,8 +487,10 @@ export default function InventoryMaster() {
         )}
       </div>
 
-      {/* --- NEW MODAL: ADD FACTORY (ADMIN ONLY) --- */}
-      {isAddFactoryModalOpen && isAdmin && (
+      {/* --- ALL MODALS BELOW ARE SECURED BY PERMISSIONS --- */}
+
+      {/* NEW MODAL: ADD FACTORY */}
+      {isAddFactoryModalOpen && canManageInventory && (
         <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(15, 23, 42, 0.7)', backdropFilter: 'blur(5px)' }}>
           <div className="modal-dialog modal-dialog-centered">
             <div className="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
@@ -484,18 +502,11 @@ export default function InventoryMaster() {
                 <div className="modal-body p-4 bg-light">
                   <div className="mb-3">
                     <label className="form-label small fw-bold text-uppercase text-muted mb-1">Plant / Factory Name <span className="text-danger">*</span></label>
-                    <input
-                      type="text"
-                      className="form-control border-0 shadow-sm rounded-3 py-2 fw-semibold"
-                      required
-                      placeholder="e.g. North India Manufacturing Unit"
-                      value={newFactoryName}
-                      onChange={e => setNewFactoryName(e.target.value)}
-                    />
+                    <input type="text" className="form-control border-0 shadow-sm rounded-3 py-2 fw-semibold" required placeholder="e.g. North India Manufacturing Unit" value={newFactoryName} onChange={e => setNewFactoryName(e.target.value)} />
                   </div>
                   <div className="p-3 bg-primary bg-opacity-10 border border-primary border-opacity-25 rounded-3 text-dark small fw-semibold">
                     <i className="fa-solid fa-circle-info text-primary me-2"></i>
-                    Once registered, this facility will immediately be available for logging production batches and dispatching inventory to the Super Stockist network.
+                    Once registered, this facility will immediately be available for logging production batches.
                   </div>
                 </div>
                 <div className="modal-footer border-0 p-4 bg-white">
@@ -508,8 +519,8 @@ export default function InventoryMaster() {
         </div>
       )}
 
-      {/* --- MODAL: LOG PRODUCTION --- */}
-      {isProduceModalOpen && (
+      {/* MODAL: LOG PRODUCTION */}
+      {isProduceModalOpen && canManageInventory && (
         <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(15, 23, 42, 0.7)', backdropFilter: 'blur(5px)' }}>
           <div className="modal-dialog modal-dialog-centered modal-lg">
             <div className="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
@@ -523,10 +534,10 @@ export default function InventoryMaster() {
                     <div className="col-md-6">
                       <label className="form-label small fw-bold text-uppercase text-muted mb-1">Target Plant <span className="text-danger">*</span></label>
                       <select className="form-select border-0 shadow-sm rounded-3 py-2 fw-semibold" required value={produceForm.factory_id} onChange={e => setProduceForm({...produceForm, factory_id: e.target.value})}>
+                        <option value="" disabled>Select Plant...</option>
                         {masterData.factories.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
                       </select>
                     </div>
-
                     <div className="col-md-6">
                       <label className="form-label small fw-bold text-uppercase text-muted mb-1">Product SKU <span className="text-danger">*</span></label>
                       <select className="form-select border-0 shadow-sm rounded-3 py-2 fw-semibold" required value={produceForm.product_id} onChange={e => setProduceForm({...produceForm, product_id: e.target.value})}>
@@ -534,17 +545,14 @@ export default function InventoryMaster() {
                         {masterData.products.map(p => <option key={p.id} value={p.id}>{p.name || p.product_name}</option>)}
                       </select>
                     </div>
-
                     <div className="col-md-6">
                       <label className="form-label small fw-bold text-uppercase text-muted mb-1">Batch Number <span className="text-danger">*</span></label>
                       <input type="text" className="form-control border-0 shadow-sm rounded-3 py-2 text-uppercase fw-bold" required placeholder="e.g. BATCH-001A" value={produceForm.batch_number} onChange={e => setProduceForm({...produceForm, batch_number: e.target.value})} />
                     </div>
-
                     <div className="col-md-6">
                       <label className="form-label small fw-bold text-uppercase text-muted mb-1">Production Date <span className="text-danger">*</span></label>
                       <input type="date" className="form-control border-0 shadow-sm rounded-3 py-2 fw-semibold text-muted" required value={produceForm.production_date} onChange={e => setProduceForm({...produceForm, production_date: e.target.value})} />
                     </div>
-
                     <div className="col-12 mt-4">
                       <label className="form-label small fw-bold text-uppercase text-muted mb-1">Units Minted <span className="text-danger">*</span></label>
                       <input type="number" className="form-control form-control-lg border-0 shadow-sm rounded-3 fw-bold text-success fs-4" required min="1" placeholder="+0" value={produceForm.quantity_produced} onChange={e => setProduceForm({...produceForm, quantity_produced: e.target.value})} />
@@ -561,8 +569,8 @@ export default function InventoryMaster() {
         </div>
       )}
 
-      {/* --- MODAL: ADJUST STOCK --- */}
-      {isAdjustModalOpen && (
+      {/* MODAL: ADJUST STOCK */}
+      {isAdjustModalOpen && canManageInventory && (
         <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(15, 23, 42, 0.7)', backdropFilter: 'blur(5px)' }}>
           <div className="modal-dialog modal-dialog-centered modal-lg">
             <div className="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
@@ -571,12 +579,10 @@ export default function InventoryMaster() {
                   <h5 className="modal-title fw-bold"><i className="fa-solid fa-scale-unbalanced me-2"></i> Forced Stock Audit</h5>
                   <button type="button" className="btn-close btn-close-white opacity-75" onClick={() => setIsAdjustModalOpen(false)}></button>
                 </div>
-
                 <div className="p-3 bg-warning bg-opacity-10 border-bottom border-warning border-opacity-25 text-dark small fw-semibold d-flex align-items-center">
                   <i className="fa-solid fa-triangle-exclamation text-warning fs-5 mx-3"></i>
                   Warning: Adjustments bypass standard Order workflows and should only be used for damage write-offs, shrinkage, or audit corrections.
                 </div>
-
                 <div className="modal-body p-4 bg-light">
                   <div className="row g-4">
                     <div className="col-md-6">
@@ -586,7 +592,6 @@ export default function InventoryMaster() {
                         <option value="ss">Super Stockist</option>
                       </select>
                     </div>
-
                     <div className="col-md-6">
                       <label className="form-label small fw-bold text-uppercase text-muted mb-1">Specific Target <span className="text-danger">*</span></label>
                       <select className="form-select border-0 shadow-sm rounded-3 py-2 fw-bold text-primary" required value={adjustForm.entity_id} onChange={e => setAdjustForm({...adjustForm, entity_id: e.target.value})}>
@@ -596,7 +601,6 @@ export default function InventoryMaster() {
                         ))}
                       </select>
                     </div>
-
                     <div className="col-md-6">
                       <label className="form-label small fw-bold text-uppercase text-muted mb-1">Target Asset <span className="text-danger">*</span></label>
                       <select className="form-select border-0 shadow-sm rounded-3 py-2 fw-semibold" required value={adjustForm.product_id} onChange={e => setAdjustForm({...adjustForm, product_id: e.target.value})}>
@@ -604,12 +608,10 @@ export default function InventoryMaster() {
                         {masterData.products.map(p => <option key={p.id} value={p.id}>{p.name || p.product_name}</option>)}
                       </select>
                     </div>
-
                     <div className="col-md-6">
                       <label className="form-label small fw-bold text-uppercase text-muted mb-1">Numeric Delta <span className="text-danger">*</span></label>
                       <input type="number" className="form-control border-0 shadow-sm rounded-3 py-2 fw-bold" required placeholder="e.g. -10 (shrinkage) or +5" value={adjustForm.quantity} onChange={e => setAdjustForm({...adjustForm, quantity: e.target.value})} />
                     </div>
-
                     <div className="col-12">
                       <label className="form-label small fw-bold text-uppercase text-muted mb-1">Audit Justification</label>
                       <input type="text" className="form-control border-0 shadow-sm rounded-3 py-2" placeholder="e.g. Broken in transit, cycle count correction..." value={adjustForm.reason} onChange={e => setAdjustForm({...adjustForm, reason: e.target.value})} />

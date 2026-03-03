@@ -3,14 +3,22 @@ import Chart from 'react-apexcharts';
 import { MapContainer, TileLayer, CircleMarker, Popup, Tooltip } from 'react-leaflet';
 import api from '../api';
 import { AuthContext } from '../context/AuthContext';
+import 'leaflet/dist/leaflet.css';
 
 export default function Dashboard() {
   const { user } = useContext(AuthContext);
   const terminalRef = useRef(null);
 
   // --- STRICT RBAC EVALUATION ---
-  const isAdminOrInternal = ['Admin', 'ZSM', 'RSM', 'ASM', 'SO'].includes(user?.role);
-  const isPartner = ['SuperStockist', 'Distributor', 'Retailer'].includes(user?.role);
+  const roleName = typeof user?.role === 'object' ? user?.role?.name : user?.role;
+  const userPerms = user?.permissions || [];
+
+  // These checks remain because they drive structural UI differences (Admin Map vs Partner Donut)
+  // But they do NOT restrict database execution (which is now handled by userPerms)
+  const isAdminOrInternal = ['Admin', 'ZSM', 'RSM', 'ASM', 'SO'].includes(roleName);
+  const isPartner = ['SuperStockist', 'Distributor', 'Retailer'].includes(roleName);
+
+  const isAdmin = roleName?.toLowerCase() === 'admin' || userPerms.includes('manage_roles');
 
   // --- LIVE DATA STATES ---
   const [loading, setLoading] = useState(true);
@@ -85,7 +93,7 @@ export default function Dashboard() {
         // Identify Partner ID if applicable
         let myPartnerId = null;
         if (isPartner) {
-            const myProfile = user?.role === 'SuperStockist' ? ss[0] : user?.role === 'Distributor' ? dist[0] : ret[0];
+            const myProfile = roleName === 'SuperStockist' ? ss[0] : roleName === 'Distributor' ? dist[0] : ret[0];
             myPartnerId = myProfile ? myProfile.id : null;
         }
 
@@ -102,26 +110,26 @@ export default function Dashboard() {
                 let type = l.transaction_type === 'PRODUCTION' ? 'SUCCESS' : l.transaction_type === 'ADJUSTMENT' ? 'WARN' : 'INFO';
                 const d = l.quantity_change > 0 ? `+${l.quantity_change}` : l.quantity_change;
                 const pName = productDict[l.product_id] || `PRD-${l.product_id}`;
-                return { time: new Date(l.created_at).toLocaleTimeString(), type, msg: `[${l.entity_type.toUpperCase()}] ${l.transaction_type}: ${d}x ${pName}. Bal: ${l.closing_balance}` };
+                return { time: new Date(l.created_at).toLocaleTimeString('en-IN'), type, msg: `[${l.entity_type.toUpperCase()}] ${l.transaction_type}: ${d}x ${pName}. Bal: ${l.closing_balance}` };
             });
 
         } else if (isPartner && myPartnerId) {
             // EXTERNAL PARTNER LOGIC
             // 1. Fetch their specific stock
-            const tierStr = user?.role === 'SuperStockist' ? 'ss' : user?.role === 'Distributor' ? 'distributor' : 'retailer';
+            const tierStr = roleName === 'SuperStockist' ? 'ss' : roleName === 'Distributor' ? 'distributor' : 'retailer';
             const myStockRes = await api.get(`/inventory/${tierStr}/${myPartnerId}`).catch(() => ({ data: [] }));
             const myStockItems = Array.isArray(myStockRes.data) ? myStockRes.data : myStockRes.data?.items || [];
             calculatedStock = myStockItems.reduce((sum, item) => sum + (item.current_stock_qty || item.current_stock || item.quantity || 0), 0);
 
             // 2. Determine their specific downstream network
-            if (user?.role === 'SuperStockist') downStreamNetwork = dist.length;
-            if (user?.role === 'Distributor') downStreamNetwork = ret.length;
-            if (user?.role === 'Retailer') downStreamNetwork = cons.length;
+            if (roleName === 'SuperStockist') downStreamNetwork = dist.length;
+            if (roleName === 'Distributor') downStreamNetwork = ret.length;
+            if (roleName === 'Retailer') downStreamNetwork = cons.length;
 
             // 3. Chart their Inbound vs Outbound
-            if (user?.role === 'SuperStockist') { inboundCount = pOrders.filter(o => o.type === 'FACTORY_TO_SS').length; outboundCount = pOrders.filter(o => o.type === 'SS_TO_DB').length; }
-            if (user?.role === 'Distributor') { inboundCount = pOrders.filter(o => o.type === 'SS_TO_DB' || o.type === 'FACTORY_TO_DB').length; outboundCount = sOrders.length; }
-            if (user?.role === 'Retailer') { inboundCount = sOrders.length; outboundCount = tOrders.length; }
+            if (roleName === 'SuperStockist') { inboundCount = pOrders.filter(o => o.type === 'FACTORY_TO_SS').length; outboundCount = pOrders.filter(o => o.type === 'SS_TO_DB').length; }
+            if (roleName === 'Distributor') { inboundCount = pOrders.filter(o => o.type === 'SS_TO_DB' || o.type === 'FACTORY_TO_DB').length; outboundCount = sOrders.length; }
+            if (roleName === 'Retailer') { inboundCount = sOrders.length; outboundCount = tOrders.length; }
             setPipelineChartData([inboundCount, outboundCount]);
 
             // 4. Determine their Top Products for the Donut Chart
@@ -145,14 +153,14 @@ export default function Dashboard() {
                 const qty = o.items?.[0]?.quantity || o.quantity || 0;
                 const verb = isMyInbound ? 'Receiving' : 'Dispatching';
                 const status = (o.status || 'Pending').toUpperCase();
-                return { time: new Date().toLocaleTimeString(), type: status === 'PENDING' ? 'INFO' : type, msg: `[${o.order_number || `ORD-${o.id}`}] ${verb} ${qty}x ${pName} - ${status}` };
+                return { time: new Date().toLocaleTimeString('en-IN'), type: status === 'PENDING' ? 'INFO' : type, msg: `[${o.order_number || `ORD-${o.id}`}] ${verb} ${qty}x ${pName} - ${status}` };
             });
         }
 
         // Add boot sequence to terminal
         setTerminalLogs([
-          { time: new Date().toLocaleTimeString(), type: 'SECURE', msg: `Pulse Engine Initialized for ${user?.role}...` },
-          { time: new Date().toLocaleTimeString(), type: 'INFO', msg: "Encrypted connection established." },
+          { time: new Date().toLocaleTimeString('en-IN'), type: 'SECURE', msg: `Pulse Engine Initialized for ${roleName}...` },
+          { time: new Date().toLocaleTimeString('en-IN'), type: 'INFO', msg: "Encrypted connection established." },
           ...mergedLogs
         ]);
 
@@ -177,7 +185,7 @@ export default function Dashboard() {
     };
 
     fetchDashboardData();
-  }, [isAdminOrInternal, isPartner, user]);
+  }, [isAdminOrInternal, isPartner, user, roleName]);
 
   // Auto-scroll terminal
   useEffect(() => {
@@ -210,8 +218,8 @@ export default function Dashboard() {
   // --- STATIC MAP CONFIGURATION (Admin Only) ---
   const cities = [
     { name: "Mumbai (HQ/Factory)", coords: [19.0760, 72.8777], volume: 95, color: "#2563eb" },
-    { name: "Delhi", coords: [28.7041, 77.1025], volume: 65, color: "#f59e0b" },
-    { name: "Bangalore", coords: [12.9716, 77.5946], volume: 55, color: "#10b981" }
+    { name: "Baddi", coords: [30.9388, 76.7865], volume: 85, color: "#f59e0b" },
+    { name: "Delhi", coords: [28.7041, 77.1025], volume: 65, color: "#10b981" }
   ];
 
   const getLogColor = (type) => {
@@ -227,39 +235,55 @@ export default function Dashboard() {
   if(loading) return <div className="p-5 text-center text-muted"><div className="spinner-border text-primary mb-3"></div><br/>Booting Enterprise Gateway...</div>;
 
   return (
-    <>
+    <div className="container-fluid p-4" style={{ backgroundColor: '#f4f7f8', minHeight: '100vh' }}>
+
+      {/* DASHBOARD HEADER */}
+      <div className="d-flex justify-content-between align-items-end mb-4">
+        <div>
+          <h3 className="fw-bolder m-0 text-dark" style={{ letterSpacing: '-0.5px' }}>Command Center</h3>
+          <p className="text-muted m-0 mt-1">Real-time telemetry and network overview.</p>
+        </div>
+        <div className="text-end d-none d-md-block">
+          <div className="text-muted small fw-bold text-uppercase">System Status</div>
+          <span className="badge bg-success bg-opacity-10 text-success border border-success border-opacity-25 px-3 py-2 rounded-pill shadow-sm">
+            <span className="spinner-grow spinner-grow-sm me-2" role="status" aria-hidden="true" style={{ width: '0.6rem', height: '0.6rem' }}></span>
+            ALL SYSTEMS NOMINAL
+          </span>
+        </div>
+      </div>
+
       {/* 1. DYNAMIC KPIs */}
       <div className="row g-4 mb-4">
         <div className="col-md-3">
-          <div className="kpi-card border-start border-4 border-primary">
-            <i className="fa-solid fa-boxes-stacked kpi-icon text-primary"></i>
-            <div className="kpi-title">{isAdminOrInternal ? 'Global Factory Stock' : 'My Total Inventory'}</div>
-            <div className="kpi-value">{stats.stockVolume.toLocaleString()}</div>
-            <div className="kpi-trend up"><i className="fa-solid fa-arrow-trend-up"></i> Active units ready</div>
+          <div className="kpi-card border-start border-4 border-primary bg-white shadow-sm p-4 h-100 rounded-4">
+            <i className="fa-solid fa-boxes-stacked kpi-icon text-primary fs-2 mb-3"></i>
+            <div className="text-muted small fw-bold text-uppercase mb-1">{isAdminOrInternal ? 'Global Factory Stock' : 'My Total Inventory'}</div>
+            <div className="fs-3 fw-bold text-dark mb-1">{stats.stockVolume.toLocaleString()}</div>
+            <div className="small text-success fw-semibold"><i className="fa-solid fa-arrow-trend-up"></i> Active units ready</div>
           </div>
         </div>
         <div className="col-md-3">
-          <div className="kpi-card border-start border-4 border-warning">
-            <i className="fa-solid fa-truck-ramp-box kpi-icon text-warning"></i>
-            <div className="kpi-title">{isAdminOrInternal ? 'Pending Operations' : 'Awaiting My Action'}</div>
-            <div className="kpi-value">{stats.pendingAction}</div>
-            <div className="kpi-trend text-muted"><i className="fa-solid fa-clock"></i> In pipeline queue</div>
+          <div className="kpi-card border-start border-4 border-warning bg-white shadow-sm p-4 h-100 rounded-4">
+            <i className="fa-solid fa-truck-ramp-box kpi-icon text-warning fs-2 mb-3"></i>
+            <div className="text-muted small fw-bold text-uppercase mb-1">{isAdminOrInternal ? 'Pending Operations' : 'Awaiting My Action'}</div>
+            <div className="fs-3 fw-bold text-dark mb-1">{stats.pendingAction}</div>
+            <div className="small text-warning fw-semibold"><i className="fa-solid fa-clock"></i> In pipeline queue</div>
           </div>
         </div>
         <div className="col-md-3">
-          <div className="kpi-card border-start border-4 border-success">
-            <i className="fa-solid fa-network-wired kpi-icon text-success"></i>
-            <div className="kpi-title">{isAdminOrInternal ? 'Total Network Nodes' : 'My Downstream Network'}</div>
-            <div className="kpi-value">{stats.networkSize}</div>
-            <div className="kpi-trend up"><i className="fa-solid fa-check-circle"></i> Linked partners</div>
+          <div className="kpi-card border-start border-4 border-success bg-white shadow-sm p-4 h-100 rounded-4">
+            <i className="fa-solid fa-network-wired kpi-icon text-success fs-2 mb-3"></i>
+            <div className="text-muted small fw-bold text-uppercase mb-1">{isAdminOrInternal ? 'Total Network Nodes' : 'My Downstream Network'}</div>
+            <div className="fs-3 fw-bold text-dark mb-1">{stats.networkSize}</div>
+            <div className="small text-success fw-semibold"><i className="fa-solid fa-check-circle"></i> Linked partners</div>
           </div>
         </div>
         <div className="col-md-3">
-          <div className="kpi-card border-start border-4 border-info bg-info bg-opacity-10">
-            <i className="fa-solid fa-microchip kpi-icon text-info opacity-25"></i>
-            <div className="kpi-title text-info">{isAdminOrInternal ? 'System Pulse Ops' : 'Total Transactions'}</div>
-            <div className="kpi-value text-info">{stats.pulseOps}</div>
-            <div className="kpi-trend text-info"><i className="fa-solid fa-database"></i> Processed securely</div>
+          <div className="kpi-card border-start border-4 border-info bg-info bg-opacity-10 shadow-sm p-4 h-100 rounded-4">
+            <i className="fa-solid fa-microchip kpi-icon text-info opacity-50 fs-2 mb-3"></i>
+            <div className="text-info small fw-bold text-uppercase mb-1">{isAdminOrInternal ? 'System Pulse Ops' : 'Total Transactions'}</div>
+            <div className="fs-3 fw-bold text-info mb-1">{stats.pulseOps}</div>
+            <div className="small text-info fw-semibold"><i className="fa-solid fa-database"></i> Processed securely</div>
           </div>
         </div>
       </div>
@@ -267,9 +291,9 @@ export default function Dashboard() {
       {/* 2. CHARTS & QUICK ACTIONS */}
       <div className="row g-4 mb-4">
         <div className="col-lg-8">
-          <div className="dashboard-card h-100">
-            <div className="dashboard-card-header">
-              <span><i className="fa-solid fa-chart-simple text-primary me-2"></i> {isAdminOrInternal ? 'Global Supply Pipeline' : 'My Trade Volume Analysis'}</span>
+          <div className="card border-0 shadow-sm rounded-4 h-100 bg-white">
+            <div className="card-header bg-white border-bottom p-4 d-flex justify-content-between align-items-center">
+              <span className="fw-bold"><i className="fa-solid fa-chart-simple text-primary me-2"></i> {isAdminOrInternal ? 'Global Supply Pipeline' : 'My Trade Volume Analysis'}</span>
               <span className="badge bg-light text-dark border"><i className="fa-solid fa-filter me-1"></i> Live Data</span>
             </div>
             <div className="card-body p-3">
@@ -279,22 +303,38 @@ export default function Dashboard() {
         </div>
 
         <div className="col-lg-4">
-          <div className="dashboard-card mb-4">
-            <div className="dashboard-card-header bg-light">
-              <span><i className="fa-solid fa-bolt text-warning me-2"></i> Command Controls</span>
+          <div className="card border-0 shadow-sm rounded-4 mb-4 bg-white overflow-hidden">
+            <div className="card-header bg-light border-bottom p-3">
+              <span className="fw-bold"><i className="fa-solid fa-bolt text-warning me-2"></i> Command Controls</span>
             </div>
             <div className="card-body p-3">
               <div className="d-grid gap-2">
-                <a href="/inventory" className="btn btn-primary text-start fw-bold"><i className={`fa-solid ${isAdminOrInternal ? 'fa-industry' : 'fa-boxes-packing'} me-2 width-20`}></i> {isAdminOrInternal ? 'Log Factory Production' : 'View My Inventory'}</a>
-                <a href="/orders" className="btn btn-outline-dark text-start fw-bold"><i className="fa-solid fa-truck-fast me-2 width-20"></i> {isAdminOrInternal ? 'Manage Global Routes' : 'Place / Dispatch Orders'}</a>
-                {isAdminOrInternal && <a href="/partners" className="btn btn-outline-dark text-start fw-bold"><i className="fa-solid fa-user-plus me-2 width-20"></i> Register Network Partner</a>}
+                {(isAdmin || userPerms.includes('manage_inventory')) && (
+                  <a href="/inventory" className="btn btn-primary text-start fw-bold"><i className={`fa-solid ${isAdminOrInternal ? 'fa-industry' : 'fa-boxes-packing'} me-2`} style={{width: '20px'}}></i> {isAdminOrInternal ? 'Log Factory Production' : 'View My Inventory'}</a>
+                )}
+
+                {(isAdmin || userPerms.includes('dispatch_order') || userPerms.includes('create_primary_order') || userPerms.includes('create_secondary_order')) && (
+                  <a href="/orders" className="btn btn-outline-dark text-start fw-bold"><i className="fa-solid fa-truck-fast me-2" style={{width: '20px'}}></i> {isAdminOrInternal ? 'Manage Global Routes' : 'Place / Dispatch Orders'}</a>
+                )}
+
+                {(isAdmin || userPerms.includes('manage_partners')) && (
+                  <a href="/partners" className="btn btn-outline-dark text-start fw-bold"><i className="fa-solid fa-user-plus me-2" style={{width: '20px'}}></i> Register Network Partner</a>
+                )}
+
+                {/* Failsafe if they have zero execution permissions */}
+                {!isAdmin && !userPerms.includes('manage_inventory') && !userPerms.includes('dispatch_order') && !userPerms.includes('manage_partners') && !userPerms.includes('create_primary_order') && (
+                  <div className="text-center p-3 text-muted small fst-italic">
+                    <i className="fa-solid fa-lock mb-2 d-block fs-4 opacity-25"></i>
+                    Execution controls are restricted by your current Security Clearance.
+                  </div>
+                )}
               </div>
             </div>
           </div>
 
-          <div className="dashboard-card mb-0">
-            <div className="dashboard-card-header bg-light">
-              <span><i className="fa-solid fa-server text-secondary me-2"></i> Infrastructure Health</span>
+          <div className="card border-0 shadow-sm rounded-4 bg-white overflow-hidden">
+            <div className="card-header bg-light border-bottom p-3">
+              <span className="fw-bold"><i className="fa-solid fa-server text-secondary me-2"></i> Infrastructure Health</span>
             </div>
             <div className="card-body p-3">
               <div className="mb-3">
@@ -314,15 +354,15 @@ export default function Dashboard() {
       {/* 3. DYNAMIC MIDDLE ROW: Admin gets Map. Partner gets Top Products Donut. Both get Terminal. */}
       <div className="row g-4 mb-4">
         <div className="col-lg-6">
-          <div className="dashboard-card h-100">
+          <div className="card border-0 shadow-sm rounded-4 h-100 bg-white overflow-hidden">
             {isAdminOrInternal ? (
               <>
-                <div className="dashboard-card-header">
-                  <span><i className="fa-solid fa-satellite-dish text-danger me-2"></i> Live Logistics Heatmap</span>
+                <div className="card-header bg-white border-bottom p-4">
+                  <span className="fw-bold"><i className="fa-solid fa-satellite-dish text-danger me-2"></i> Live Logistics Heatmap</span>
                 </div>
-                <div style={{ height: '400px', width: '100%', borderRadius: '0 0 12px 12px', overflow: 'hidden' }}>
-                  <MapContainer center={[21.5937, 78.9629]} zoom={4.5} scrollWheelZoom={false} style={{ height: '100%', width: '100%' }}>
-                    <TileLayer url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png" />
+                <div style={{ height: '400px', width: '100%' }}>
+                  <MapContainer center={[21.5937, 78.9629]} zoom={4.5} scrollWheelZoom={false} style={{ height: '100%', width: '100%', zIndex: 1 }}>
+                    <TileLayer url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png" attribution="&copy; OpenStreetMap" />
                     {cities.map((city, idx) => (
                       <CircleMarker key={idx} center={city.coords} pathOptions={{ color: city.color, fillColor: city.color, fillOpacity: 0.4 }} radius={city.volume / 4}>
                         <Tooltip><strong>{city.name}</strong></Tooltip>
@@ -333,8 +373,8 @@ export default function Dashboard() {
               </>
             ) : (
               <>
-                <div className="dashboard-card-header">
-                  <span><i className="fa-solid fa-chart-pie text-primary me-2"></i> My Highest Velocity SKUs</span>
+                <div className="card-header bg-white border-bottom p-4">
+                  <span className="fw-bold"><i className="fa-solid fa-chart-pie text-primary me-2"></i> My Highest Velocity SKUs</span>
                 </div>
                 <div className="p-4 d-flex justify-content-center align-items-center" style={{ height: '400px' }}>
                   {partnerProductChart.series.length > 0 ? (
@@ -349,15 +389,15 @@ export default function Dashboard() {
         </div>
 
         <div className="col-lg-6">
-          <div className="dashboard-card h-100 bg-dark border-0">
-            <div className="dashboard-card-header bg-black text-white border-0" style={{ borderRadius: '12px 12px 0 0' }}>
-              <span><i className="fa-solid fa-terminal text-success me-2"></i> {isAdminOrInternal ? 'Global Inventory Audit Stream' : 'Live Node Activity Stream'}</span>
+          <div className="card border-0 shadow-sm rounded-4 h-100 bg-dark overflow-hidden">
+            <div className="card-header bg-black text-white border-0 p-4">
+              <span className="fw-bold"><i className="fa-solid fa-terminal text-success me-2"></i> {isAdminOrInternal ? 'Global Inventory Audit Stream' : 'Live Node Activity Stream'}</span>
             </div>
             <div className="p-0 h-100">
-              <div className="terminal p-3" ref={terminalRef} style={{ height: '400px', backgroundColor: '#0f172a', overflowY: 'auto' }}>
+              <div className="terminal p-4 custom-scrollbar" ref={terminalRef} style={{ height: '400px', backgroundColor: '#0f172a', overflowY: 'auto' }}>
                 {terminalLogs.length === 0 ? <span className="text-muted">Awaiting stream data...</span> :
                  terminalLogs.map((log, i) => (
-                  <div key={i} className="mb-1" style={{ fontSize: '0.85rem' }}>
+                  <div key={i} className="mb-2 font-monospace" style={{ fontSize: '0.85rem' }}>
                     <span className="text-secondary">[{log.time}]</span>{' '}
                     <span style={{ color: getLogColor(log.type), fontWeight: 'bold' }}>[{log.type}]</span>{' '}
                     <span style={{ color: log.type === 'ERROR' ? '#ef4444' : '#e2e8f0' }}>{log.msg}</span>
@@ -372,9 +412,9 @@ export default function Dashboard() {
       {/* 4. RECENT TRANSACTIONS TABLE (Live Data) */}
       <div className="row g-4">
         <div className="col-12">
-          <div className="dashboard-card">
-            <div className="dashboard-card-header">
-              <span><i className="fa-solid fa-list-check text-info me-2"></i> {isAdminOrInternal ? 'Latest Global Operations' : 'My Recent Order Flow'}</span>
+          <div className="card border-0 shadow-sm rounded-4 bg-white overflow-hidden">
+            <div className="card-header bg-white border-bottom p-4">
+              <span className="fw-bold"><i className="fa-solid fa-list-check text-info me-2"></i> {isAdminOrInternal ? 'Latest Global Operations' : 'My Recent Order Flow'}</span>
             </div>
             <div className="table-responsive">
               <table className="table table-hover align-middle mb-0">
@@ -446,6 +486,6 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
-    </>
+    </div>
   );
 }

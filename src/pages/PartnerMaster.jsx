@@ -11,6 +11,7 @@ const initialFormState = {
   parent_ss_id: '',
   linked_distributor_id: '',
   gstin: '',
+  user_id: '', // Used for linking a System User (Login) to a Business Entity
   is_active: true
 };
 
@@ -22,8 +23,10 @@ export default function PartnerMaster() {
   // --- BULLETPROOF RBAC LOGIC ---
   const { user } = useContext(AuthContext);
   const roleName = typeof user?.role === 'object' ? user?.role?.name : user?.role;
-  const isAdmin = roleName?.toLowerCase() === 'admin';
+  const isAdmin = roleName?.toLowerCase() === 'admin' || (user?.permissions || []).includes('manage_roles');
   const userPerms = user?.permissions || [];
+
+  // Drives database execution (Can they click the Add/Edit/Delete buttons?)
   const canManagePartners = isAdmin || userPerms.includes('manage_partners');
 
   // --- CASCADING GEO STATE ---
@@ -33,6 +36,9 @@ export default function PartnerMaster() {
   const [geoFilter, setGeoFilter] = useState({
     zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: ''
   });
+
+  // --- SYSTEM USERS STATE ---
+  const [systemUsers, setSystemUsers] = useState([]);
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -64,11 +70,12 @@ export default function PartnerMaster() {
     const fetchInitialData = async () => {
       setLoading(true);
       try {
-        const [ssRes, distRes, retRes, zonesRes] = await Promise.all([
+        const [ssRes, distRes, retRes, zonesRes, usersRes] = await Promise.all([
           api.get('/partners/super-stockists').catch(() => ({ data: [] })),
           api.get('/partners/distributors').catch(() => ({ data: [] })),
           api.get('/partners/retailers').catch(() => ({ data: [] })),
-          api.get('/geo/zones').catch(() => ({ data: [] })) // Only fetch root zones!
+          api.get('/geo/zones').catch(() => ({ data: [] })),
+          api.get('/users/').catch(() => ({ data: [] }))
         ]);
 
         setPartners({
@@ -81,6 +88,8 @@ export default function PartnerMaster() {
           ...prev,
           zones: Array.isArray(zonesRes.data) ? zonesRes.data : zonesRes.data?.items || []
         }));
+
+        setSystemUsers(Array.isArray(usersRes.data) ? usersRes.data : []);
 
       } catch (err) {
         console.error("Hydration failed", err);
@@ -163,6 +172,7 @@ export default function PartnerMaster() {
       parent_ss_id: partner.parent_ss_id || '',
       linked_distributor_id: partner.linked_distributor_id || '',
       gstin: partner.gstin || '',
+      user_id: partner.user_id || '',
       is_active: partner.is_active !== undefined ? partner.is_active : true
     });
 
@@ -181,6 +191,9 @@ export default function PartnerMaster() {
 
   const buildPayload = () => {
     const payload = { ...formData };
+
+    // Convert user_id to Int if present, otherwise null
+    payload.user_id = payload.user_id ? parseInt(payload.user_id) : null;
 
     if (activeTab === 'ss') {
       payload.firm_name = payload.name;
@@ -271,6 +284,14 @@ export default function PartnerMaster() {
            (p.gstin && p.gstin.toLowerCase().includes(searchQuery.toLowerCase()));
   });
 
+  // Helper to find username based on user_id for the table display
+  const getUsername = (userId) => {
+    if (!userId) return "None";
+    const mappedUser = systemUsers.find(u => u.id === userId);
+    return mappedUser ? mappedUser.username : `ID: ${userId}`;
+  };
+
+
   return (
     <div className="container-fluid p-4" style={{ backgroundColor: '#f8f9fa', minHeight: '100vh' }}>
       <Toaster position="top-right" toastOptions={{ style: { borderRadius: '10px', background: '#333', color: '#fff' } }} />
@@ -284,7 +305,7 @@ export default function PartnerMaster() {
           <p className="text-muted m-0 mt-1">Manage and provision your supply chain network nodes.</p>
         </div>
 
-        {/* ADD BUTTON SECURED */}
+        {/* ADD BUTTON SECURED BY PERMISSIONS */}
         {canManagePartners && (
           <button className="btn btn-primary btn-lg shadow-sm rounded-pill px-4 fw-semibold" onClick={() => setIsModalOpen(true)}>
             <i className="fa-solid fa-plus me-2"></i> Add {activeTab === 'ss' ? 'Super Stockist' : activeTab.slice(0, -1)}
@@ -353,7 +374,8 @@ export default function PartnerMaster() {
                 <th className="py-3 text-uppercase text-muted fw-bold border-bottom-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>Entity Details</th>
                 <th className="py-3 text-uppercase text-muted fw-bold border-bottom-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>Contact</th>
                 <th className="py-3 text-uppercase text-muted fw-bold border-bottom-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>Geography Level</th>
-                <th className="py-3 text-uppercase text-muted fw-bold border-bottom-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>GSTIN</th>
+                <th className="py-3 text-uppercase text-muted fw-bold border-bottom-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>System Link</th>
+
                 {/* TABLE HEADER SECURED */}
                 {canManagePartners && (
                   <th className="text-end px-4 py-3 text-uppercase text-muted fw-bold border-bottom-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>Actions</th>
@@ -379,7 +401,7 @@ export default function PartnerMaster() {
                   </td>
                   <td>
                     <div className="fw-bolder text-dark fs-6">{getPartnerName(p)}</div>
-                    <small className="text-muted font-monospace opacity-75">UID: #{p.id}</small>
+                    <small className="text-muted font-monospace opacity-75">UID: #{p.id} {p.gstin && `| GST: ${p.gstin}`}</small>
                   </td>
                   <td>
                     <div className="small fw-semibold text-dark mb-1"><i className="fa-regular fa-user text-muted me-2"></i>{getContactPerson(p)}</div>
@@ -396,7 +418,17 @@ export default function PartnerMaster() {
                        <div className="small text-primary mt-1 fw-semibold ms-1"><i className="fa-solid fa-link me-1"></i> Dist Assigned</div>
                     )}
                   </td>
-                  <td>{p.gstin ? <code className="text-primary bg-primary bg-opacity-10 px-2 py-1 rounded border border-primary border-opacity-25">{p.gstin}</code> : <span className="text-muted small">-</span>}</td>
+                  <td>
+                    {p.user_id ? (
+                        <span className="badge bg-dark text-white rounded-pill px-3 py-2">
+                           <i className="fa-solid fa-key me-1 text-warning"></i> {getUsername(p.user_id)}
+                        </span>
+                    ) : (
+                        <span className="badge bg-light text-muted border border-secondary border-opacity-25 rounded-pill px-3 py-2">
+                            Unlinked
+                        </span>
+                    )}
+                  </td>
 
                   {/* TABLE ACTIONS SECURED */}
                   {canManagePartners && (
@@ -414,7 +446,7 @@ export default function PartnerMaster() {
       </div>
 
       {/* --- MODAL --- */}
-      {isModalOpen && (
+      {isModalOpen && canManagePartners && (
         <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(15, 23, 42, 0.6)', backdropFilter: 'blur(4px)' }}>
           <div className="modal-dialog modal-dialog-centered modal-lg">
             <div className="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
@@ -440,6 +472,26 @@ export default function PartnerMaster() {
                     <div className="col-md-6">
                       <label className="form-label small fw-bold text-uppercase text-muted mb-1">Phone Number</label>
                       <input type="text" className="form-control border-0 shadow-sm rounded-3 py-2 fw-semibold" placeholder="+91..." value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})} />
+                    </div>
+
+                    {/* --- DIGITAL CREDENTIAL LINKAGE --- */}
+                    <div className="col-12 mt-3 p-3 bg-dark rounded-3 shadow-sm border-0">
+                       <label className="form-label fw-bold text-uppercase text-warning mb-2">
+                        <i className="fa-solid fa-key me-2"></i> Digital Access Keycard (System User)
+                      </label>
+                      <p className="small text-light opacity-75 mb-2">Link a system user account so the business owner can log into Pulse and view their filtered data.</p>
+                      <select
+                          className="form-select border-0 fw-semibold bg-white"
+                          value={formData.user_id}
+                          onChange={e => setFormData({...formData, user_id: e.target.value})}
+                      >
+                         <option value="">-- No Digital Access (Unlinked) --</option>
+                         {systemUsers.map(u => (
+                            <option key={u.id} value={u.id}>
+                               {u.username} (Role: {u.role?.name || 'Unknown'})
+                            </option>
+                         ))}
+                      </select>
                     </div>
 
                     {/* --- CASCADING GEO DROPDOWNS --- */}

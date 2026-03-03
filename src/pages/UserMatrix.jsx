@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import api from '../api';
 import toast, { Toaster } from 'react-hot-toast';
+import { AuthContext } from '../context/AuthContext';
 
 const initialUserForm = {
   username: '',
@@ -16,7 +17,7 @@ const initialUserForm = {
   assigned_territory_id: ''
 };
 
-  const formatPermissionName = (name) => {
+const formatPermissionName = (name) => {
   if (!name) return 'Unknown';
   return name.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
 };
@@ -62,6 +63,19 @@ const categorizePermissions = (permissions) => {
 };
 
 export default function UserMatrix() {
+  const { user } = useContext(AuthContext);
+
+  // --- STRICT RBAC EVALUATION ---
+  const roleName = typeof user?.role === 'object' ? user?.role?.name : user?.role;
+  const userPerms = user?.permissions || [];
+
+  // The God-Mode Check
+  const isAdmin = roleName?.toLowerCase() === 'admin' || userPerms.includes('manage_roles');
+
+  // Execution Capabilities
+  const canManageUsers = isAdmin || userPerms.includes('manage_users');
+  const canManageRoles = isAdmin || userPerms.includes('manage_roles');
+
   const [activeTab, setActiveTab] = useState('users');
   const [loading, setLoading] = useState(false);
 
@@ -182,21 +196,21 @@ export default function UserMatrix() {
     }
   };
 
-  const openUserModal = (user = null) => {
-    if (user) {
-      setEditingUserId(user.id);
+  const openUserModal = (selectedUser = null) => {
+    if (selectedUser) {
+      setEditingUserId(selectedUser.id);
       setUserForm({
-        username: user.username || '',
-        email: user.email || '',
-        phone_number: user.phone_number || '',
+        username: selectedUser.username || '',
+        email: selectedUser.email || '',
+        phone_number: selectedUser.phone_number || '',
         password: '',
-        role_id: user.role_id || '',
-        is_active: user.is_active !== undefined ? user.is_active : true,
-        assigned_zone_id: user.assigned_zone_id || '',
-        assigned_state_id: user.assigned_state_id || '',
-        assigned_region_id: user.assigned_region_id || '',
-        assigned_area_id: user.assigned_area_id || '',
-        assigned_territory_id: user.assigned_territory_id || ''
+        role_id: selectedUser.role_id || '',
+        is_active: selectedUser.is_active !== undefined ? selectedUser.is_active : true,
+        assigned_zone_id: selectedUser.assigned_zone_id || '',
+        assigned_state_id: selectedUser.assigned_state_id || '',
+        assigned_region_id: selectedUser.assigned_region_id || '',
+        assigned_area_id: selectedUser.assigned_area_id || '',
+        assigned_territory_id: selectedUser.assigned_territory_id || ''
       });
       setGeoMaster(prev => ({ ...prev, states: [], regions: [], areas: [], territories: [] }));
     } else {
@@ -236,11 +250,11 @@ export default function UserMatrix() {
     }
   };
 
-  const handleDeleteUser = async (user) => {
-    if (!window.confirm(`CRITICAL: Suspend user account for ${user.username}?`)) return;
-    const toastId = toast.loading(`Suspending ${user.username}...`);
+  const handleDeleteUser = async (targetUser) => {
+    if (!window.confirm(`CRITICAL: Suspend user account for ${targetUser.username}?`)) return;
+    const toastId = toast.loading(`Suspending ${targetUser.username}...`);
     try {
-      await api.delete(`/users/${user.id}`);
+      await api.delete(`/users/${targetUser.id}`);
       toast.success('User suspended successfully', { id: toastId });
       fetchData();
     } catch (err) {
@@ -313,11 +327,13 @@ export default function UserMatrix() {
           <p className="text-muted m-0 mt-1">Manage user accounts, security roles, and system permissions.</p>
         </div>
         <div className="d-flex gap-2">
-          {activeTab === 'users' ? (
+          {/* SECURED PROVISION BUTTONS */}
+          {activeTab === 'users' && canManageUsers && (
             <button className="btn btn-primary shadow-sm rounded-pill px-4 fw-semibold" onClick={() => openUserModal()}>
               <i className="fa-solid fa-user-astronaut me-2"></i> Provision User
             </button>
-          ) : (
+          )}
+          {activeTab === 'matrix' && canManageRoles && (
             <button className="btn btn-dark shadow-sm rounded-pill px-4 fw-semibold" onClick={() => setIsRoleModalOpen(true)}>
               <i className="fa-solid fa-shield-virus me-2"></i> Create New Role
             </button>
@@ -347,7 +363,7 @@ export default function UserMatrix() {
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
             </div>
-          ) : (
+          ) : canManageRoles ? (
              <button
                 className={`btn rounded-pill px-4 fw-bold shadow-sm ${dirtyRoles.size > 0 ? 'btn-success text-white blink-animation' : 'btn-light text-muted'}`}
                 onClick={saveMatrixChanges}
@@ -356,6 +372,8 @@ export default function UserMatrix() {
                 <i className="fa-solid fa-floppy-disk me-2"></i>
                 {dirtyRoles.size > 0 ? `Save ${dirtyRoles.size} Edited Roles` : 'Matrix Saved'}
              </button>
+          ) : (
+            <div className="badge bg-light text-muted border px-3 py-2"><i className="fa-solid fa-eye me-1"></i> Read Only View</div>
           )}
         </div>
       </div>
@@ -371,15 +389,16 @@ export default function UserMatrix() {
                   <th className="py-3 text-uppercase text-muted fw-bold border-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>Identity Profile</th>
                   <th className="py-3 text-uppercase text-muted fw-bold border-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>Access Level</th>
                   <th className="py-3 text-uppercase text-muted fw-bold border-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>Geo Scoping</th>
-                  <th className="text-end px-4 py-3 text-uppercase text-muted fw-bold border-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>Actions</th>
+                  {/* SECURED HEADER */}
+                  {canManageUsers && <th className="text-end px-4 py-3 text-uppercase text-muted fw-bold border-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>Actions</th>}
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan="5" className="text-center py-5"><div className="spinner-border text-primary"></div></td></tr>
+                  <tr><td colSpan={canManageUsers ? "5" : "4"} className="text-center py-5"><div className="spinner-border text-primary"></div></td></tr>
                 ) : filteredUsers.length === 0 ? (
                   <tr>
-                    <td colSpan="5" className="text-center py-5 text-muted">
+                    <td colSpan={canManageUsers ? "5" : "4"} className="text-center py-5 text-muted">
                       <i className="fa-solid fa-user-slash fs-1 opacity-25 mb-3 d-block"></i>
                       <h5 className="fw-bold">No Users Found</h5>
                     </td>
@@ -421,14 +440,17 @@ export default function UserMatrix() {
                           <span className="text-muted small fst-italic"><i className="fa-solid fa-globe me-1"></i> Global Access</span>
                         )}
                       </td>
-                      <td className="text-end px-4">
-                        <button className="btn btn-light btn-sm rounded-circle me-2 text-primary shadow-sm" onClick={() => openUserModal(u)} title="Edit Account">
-                          <i className="fa-solid fa-user-pen"></i>
-                        </button>
-                        <button className="btn btn-light btn-sm rounded-circle text-danger shadow-sm border border-danger border-opacity-25" onClick={() => handleDeleteUser(u)} title="Suspend User">
-                          <i className="fa-solid fa-user-lock"></i>
-                        </button>
-                      </td>
+                      {/* SECURED ACTIONS */}
+                      {canManageUsers && (
+                        <td className="text-end px-4">
+                          <button className="btn btn-light btn-sm rounded-circle me-2 text-primary shadow-sm" onClick={() => openUserModal(u)} title="Edit Account">
+                            <i className="fa-solid fa-user-pen"></i>
+                          </button>
+                          <button className="btn btn-light btn-sm rounded-circle text-danger shadow-sm border border-danger border-opacity-25" onClick={() => handleDeleteUser(u)} title="Suspend User">
+                            <i className="fa-solid fa-user-lock"></i>
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
@@ -445,7 +467,7 @@ export default function UserMatrix() {
                 <tr>
                   <th className="text-start px-4 py-4 border-bottom" style={{ width: '30%', backgroundColor: '#f8f9fa' }}>
                     <div className="fs-6 fw-bold text-uppercase text-primary" style={{ letterSpacing: '1px' }}>System Capabilities</div>
-                    <div className="fw-normal text-muted small mt-1">Check boxes to grant module access</div>
+                    <div className="fw-normal text-muted small mt-1">{canManageRoles ? 'Check boxes to grant module access' : 'View current system routing logic'}</div>
                   </th>
                   {roles.map(r => (
                     <th key={r.id} className="py-4 border-bottom border-start border-opacity-25" style={{ backgroundColor: '#f8f9fa', minWidth: '130px' }}>
@@ -469,9 +491,11 @@ export default function UserMatrix() {
                       </div>
                       <h5 className="fw-bold text-dark">Database is missing core permissions!</h5>
                       <p className="text-muted small">You recently reset the database. You need to seed the default permissions.</p>
-                      <button className="btn btn-primary shadow-sm fw-bold px-4 rounded-pill mt-3" onClick={handleSeedPermissions}>
-                        <i className="fa-solid fa-seedling me-2"></i> Seed Master Permissions
-                      </button>
+                      {isAdmin && (
+                        <button className="btn btn-primary shadow-sm fw-bold px-4 rounded-pill mt-3" onClick={handleSeedPermissions}>
+                          <i className="fa-solid fa-seedling me-2"></i> Seed Master Permissions
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ) : Object.entries(groupedPermissions).map(([category, { icon, perms }]) => (
@@ -496,17 +520,17 @@ export default function UserMatrix() {
                         </td>
                         {roles.map(role => {
                            const hasPermission = matrixState[role.id]?.includes(perm.id) || false;
-                           const isAdmin = role.name.toLowerCase() === 'admin';
-                           const isChecked = isAdmin ? true : hasPermission;
+                           const isGodRole = role.name.toLowerCase() === 'admin';
+                           const isChecked = isGodRole ? true : hasPermission;
 
                            return (
                              <td key={`${role.id}-${perm.id}`}
                                  className={`border-end cursor-pointer transition-all ${isChecked ? 'bg-success bg-opacity-10' : 'bg-white hover-bg-light'}`}
-                                 onClick={() => !isAdmin && toggleMatrixPermission(role.id, perm.id)}
-                                 style={{ cursor: isAdmin ? 'not-allowed' : 'pointer' }}
+                                 onClick={() => canManageRoles && !isGodRole && toggleMatrixPermission(role.id, perm.id)}
+                                 style={{ cursor: (!canManageRoles || isGodRole) ? 'not-allowed' : 'pointer' }}
                              >
                                <div className="d-flex justify-content-center align-items-center h-100">
-                                 {isAdmin ? (
+                                 {isGodRole ? (
                                     <i className="fa-solid fa-circle-check text-success fs-4 opacity-75" title="Admins have all permissions by default"></i>
                                  ) : (
                                     <input
@@ -515,7 +539,8 @@ export default function UserMatrix() {
                                       checked={isChecked}
                                       onChange={() => toggleMatrixPermission(role.id, perm.id)}
                                       onClick={(e) => e.stopPropagation()}
-                                      style={{ cursor: 'pointer' }}
+                                      disabled={!canManageRoles}
+                                      style={{ cursor: canManageRoles ? 'pointer' : 'not-allowed' }}
                                     />
                                  )}
                                </div>
@@ -532,9 +557,9 @@ export default function UserMatrix() {
         )}
       </div>
 
-      {/* --- MODAL: CREATE / EDIT USER --- */}
-      {isUserModalOpen && (
-        <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(15, 23, 42, 0.7)', backdropFilter: 'blur(5px)' }}>
+      {/* --- MODAL: CREATE / EDIT USER (SECURED) --- */}
+      {isUserModalOpen && canManageUsers && (
+        <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(15, 23, 42, 0.7)', backdropFilter: 'blur(5px)', zIndex: 1050 }}>
           <div className="modal-dialog modal-dialog-centered modal-lg">
             <div className="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
               <form onSubmit={handleUserSubmit}>
@@ -668,9 +693,9 @@ export default function UserMatrix() {
         </div>
       )}
 
-      {/* --- MODAL: CREATE ROLE --- */}
-      {isRoleModalOpen && (
-        <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(15, 23, 42, 0.7)', backdropFilter: 'blur(5px)' }}>
+      {/* --- MODAL: CREATE ROLE (SECURED) --- */}
+      {isRoleModalOpen && canManageRoles && (
+        <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(15, 23, 42, 0.7)', backdropFilter: 'blur(5px)', zIndex: 1050 }}>
           <div className="modal-dialog modal-dialog-centered">
             <div className="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
               <form onSubmit={handleRoleSubmit}>
