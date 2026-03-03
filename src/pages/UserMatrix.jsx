@@ -733,7 +733,7 @@ export default function UserMatrix() {
         </div>
       )}
 
-      {/* Global Styles */}
+
       <style>{`
         @keyframes pulse {
           0% { box-shadow: 0 0 0 0 rgba(25, 135, 84, 0.7); }
