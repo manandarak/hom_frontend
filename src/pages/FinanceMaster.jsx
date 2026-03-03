@@ -1,9 +1,23 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import api from '../api';
 import toast, { Toaster } from 'react-hot-toast';
+import { AuthContext } from '../context/AuthContext';
 
 export default function FinanceMaster() {
+  const { user } = useContext(AuthContext);
   const [loading, setLoading] = useState(false);
+
+  // --- STRICT RBAC EVALUATION ---
+  const isAdminOrInternal = ['Admin', 'ZSM', 'RSM', 'ASM', 'SO'].includes(user?.role);
+
+  // Safely map partner role to API party_type keys
+  const getPartyTypeFromRole = () => {
+      if (user?.role === 'SuperStockist') return 'ss';
+      if (user?.role === 'Distributor') return 'distributor';
+      if (user?.role === 'Retailer') return 'retailer';
+      return 'ss'; // Default fallback for Admin
+  };
+  const partnerPartyType = getPartyTypeFromRole();
 
   // --- MASTER DATA (For Dropdowns) ---
   const [masterData, setMasterData] = useState({
@@ -12,15 +26,15 @@ export default function FinanceMaster() {
     retailers: []
   });
 
-  // --- GLOBAL SUMMARY STATE ---
+  // --- GLOBAL SUMMARY STATE (Admin Only) ---
   const [globalSummary, setGlobalSummary] = useState(null);
 
   // --- LEDGER STATE ---
-  const [ledgerParams, setLedgerParams] = useState({ party_type: 'ss', party_id: '' });
+  const [ledgerParams, setLedgerParams] = useState({ party_type: partnerPartyType, party_id: '' });
   const [ledgerData, setLedgerData] = useState([]);
   const [ledgerBalance, setLedgerBalance] = useState(0);
 
-  // --- MODAL & PAYMENT STATE ---
+  // --- MODAL & PAYMENT STATE (Admin Only) ---
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [paymentForm, setPaymentForm] = useState({
     party_type: 'ss',
@@ -34,29 +48,53 @@ export default function FinanceMaster() {
   // --- 1. HYDRATE DATA ON MOUNT ---
   useEffect(() => {
     fetchInitialData();
-  }, []);
+  }, [user]);
 
   const fetchInitialData = async () => {
     try {
-      // 1. Fetch Partners for dropdowns
+      // 1. Fetch Partners for dropdowns and auto-matching
       const [ssRes, distRes, retRes] = await Promise.all([
         api.get('/partners/super-stockists').catch(() => ({ data: [] })),
         api.get('/partners/distributors').catch(() => ({ data: [] })),
         api.get('/partners/retailers').catch(() => ({ data: [] }))
       ]);
 
+      const fetchedSS = Array.isArray(ssRes.data) ? ssRes.data : ssRes.data?.items || [];
+      const fetchedDistributors = Array.isArray(distRes.data) ? distRes.data : distRes.data?.items || [];
+      const fetchedRetailers = Array.isArray(retRes.data) ? retRes.data : retRes.data?.items || [];
+
       setMasterData({
-        ss: Array.isArray(ssRes.data) ? ssRes.data : ssRes.data?.items || [],
-        distributors: Array.isArray(distRes.data) ? distRes.data : distRes.data?.items || [],
-        retailers: Array.isArray(retRes.data) ? retRes.data : retRes.data?.items || []
+        ss: fetchedSS,
+        distributors: fetchedDistributors,
+        retailers: fetchedRetailers
       });
 
-      // 2. Fetch Global Company Summary
-      fetchGlobalSummary();
+      // 2. Fetch Global Company Summary if Admin
+      if (isAdminOrInternal) {
+          fetchGlobalSummary();
+      } else {
+          // If External Partner, auto-find their Profile ID and strictly lock their ledger
+          let myProfileList = [];
+          if (user?.role === 'SuperStockist') myProfileList = fetchedSS;
+          else if (user?.role === 'Distributor') myProfileList = fetchedDistributors;
+          else if (user?.role === 'Retailer') myProfileList = fetchedRetailers;
+
+          if (myProfileList.length > 0) {
+              const myProfileId = myProfileList[0].id.toString();
+              setLedgerParams({ party_type: partnerPartyType, party_id: myProfileId });
+          }
+      }
     } catch (err) {
       console.error("Hydration failed", err);
     }
   };
+
+  // 3. Auto-Trigger Ledger fetch for external partners once their ID is locked in
+  useEffect(() => {
+     if (!isAdminOrInternal && ledgerParams.party_id) {
+         fetchLedger();
+     }
+  }, [ledgerParams.party_id, isAdminOrInternal]);
 
   const fetchGlobalSummary = async () => {
     try {
@@ -156,7 +194,7 @@ export default function FinanceMaster() {
   };
 
   // Determine which data to display in the table
-  const isGlobalView = !ledgerParams.party_id;
+  const isGlobalView = !ledgerParams.party_id && isAdminOrInternal;
   const tableData = isGlobalView ? (globalSummary?.recent_global_transactions || []) : ledgerData;
 
   return (
@@ -167,17 +205,22 @@ export default function FinanceMaster() {
       <div className="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-4 gap-3">
         <div>
           <h3 className="fw-bolder m-0 text-dark" style={{ letterSpacing: '-0.5px' }}>
-            <i className="fa-solid fa-indian-rupee-sign text-primary me-2"></i> Finance & Accounts
+            <i className="fa-solid fa-indian-rupee-sign text-primary me-2"></i> {isAdminOrInternal ? 'Finance & Accounts' : 'My Account Statement'}
           </h3>
-          <p className="text-muted m-0 mt-1">Manage accounts receivable, global ledgers, and log payments.</p>
+          <p className="text-muted m-0 mt-1">
+            {isAdminOrInternal ? 'Manage accounts receivable, global ledgers, and log payments.' : 'View your outstanding balances and transactions.'}
+          </p>
         </div>
-        <button className="btn btn-success shadow-sm rounded-pill px-4 fw-semibold btn-lg" onClick={() => setIsPaymentModalOpen(true)}>
-          <i className="fa-solid fa-cash-register me-2"></i> Receive Payment
-        </button>
+        {/* PAYMENT BUTTON - STRICTLY ADMIN ONLY */}
+        {isAdminOrInternal && (
+            <button className="btn btn-success shadow-sm rounded-pill px-4 fw-semibold btn-lg" onClick={() => setIsPaymentModalOpen(true)}>
+              <i className="fa-solid fa-cash-register me-2"></i> Receive Payment
+            </button>
+        )}
       </div>
 
-      {/* GLOBAL KPI CARDS (Only show when no specific partner is selected) */}
-      {isGlobalView && globalSummary && (
+      {/* GLOBAL KPI CARDS (Strictly Admin Only, and only when no specific partner is selected) */}
+      {isAdminOrInternal && isGlobalView && globalSummary && (
         <div className="row g-4 mb-4">
           <div className="col-md-3">
             <div className="card border-0 shadow-sm rounded-4 bg-primary text-white h-100">
@@ -215,49 +258,53 @@ export default function FinanceMaster() {
         </div>
       )}
 
-      {/* LEDGER QUERY BAR */}
-      <div className="card border-0 shadow-sm rounded-4 mb-4 bg-white">
-        <div className="card-body p-3">
-          <form onSubmit={fetchLedger} className="row g-3 align-items-end">
-            <div className="col-md-3">
-              <label className="form-label small fw-bold text-uppercase text-muted mb-1">Partner Tier</label>
-              <select className="form-select border-0 bg-light shadow-sm rounded-3 py-2 fw-semibold" value={ledgerParams.party_type} onChange={e => setLedgerParams({ party_type: e.target.value, party_id: '' })}>
-                <option value="ss">Super Stockist</option>
-                <option value="distributor">Distributor</option>
-                <option value="retailer">Retailer</option>
-              </select>
+      {/* LEDGER QUERY BAR (Strictly Admin Only) */}
+      {isAdminOrInternal && (
+          <div className="card border-0 shadow-sm rounded-4 mb-4 bg-white">
+            <div className="card-body p-3">
+              <form onSubmit={fetchLedger} className="row g-3 align-items-end">
+                <div className="col-md-3">
+                  <label className="form-label small fw-bold text-uppercase text-muted mb-1">Partner Tier</label>
+                  <select className="form-select border-0 bg-light shadow-sm rounded-3 py-2 fw-semibold" value={ledgerParams.party_type} onChange={e => setLedgerParams({ party_type: e.target.value, party_id: '' })}>
+                    <option value="ss">Super Stockist</option>
+                    <option value="distributor">Distributor</option>
+                    <option value="retailer">Retailer</option>
+                  </select>
+                </div>
+                <div className="col-md-5">
+                  <label className="form-label small fw-bold text-uppercase text-muted mb-1">Select Partner</label>
+                  <select className="form-select border-0 bg-light shadow-sm rounded-3 py-2 fw-bold text-primary" value={ledgerParams.party_id} onChange={e => setLedgerParams({...ledgerParams, party_id: e.target.value})}>
+                    <option value="">-- View Global Master Ledger --</option>
+                    {getActiveList(ledgerParams.party_type).map(p => (
+                      <option key={p.id} value={p.id}>{p.name || p.firm_name || p.shop_name} (ID: {p.id})</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="col-md-4 d-flex gap-2">
+                  <button type="submit" className="btn btn-primary w-100 shadow-sm rounded-3 py-2 fw-bold" disabled={!ledgerParams.party_id || loading}>
+                    {loading ? <i className="fa-solid fa-circle-notch fa-spin"></i> : <><i className="fa-solid fa-book-open me-2"></i> Load Ledger</>}
+                  </button>
+                  {!isGlobalView && (
+                    <button type="button" className="btn btn-light border w-100 shadow-sm rounded-3 py-2 fw-bold text-muted" onClick={handleClearSelection}>
+                      <i className="fa-solid fa-arrow-left me-2"></i> Back to Global
+                    </button>
+                  )}
+                </div>
+              </form>
             </div>
-            <div className="col-md-5">
-              <label className="form-label small fw-bold text-uppercase text-muted mb-1">Select Partner</label>
-              <select className="form-select border-0 bg-light shadow-sm rounded-3 py-2 fw-bold text-primary" value={ledgerParams.party_id} onChange={e => setLedgerParams({...ledgerParams, party_id: e.target.value})}>
-                <option value="">-- View Global Master Ledger --</option>
-                {getActiveList(ledgerParams.party_type).map(p => (
-                  <option key={p.id} value={p.id}>{p.name || p.firm_name || p.shop_name} (ID: {p.id})</option>
-                ))}
-              </select>
-            </div>
-            <div className="col-md-4 d-flex gap-2">
-              <button type="submit" className="btn btn-primary w-100 shadow-sm rounded-3 py-2 fw-bold" disabled={!ledgerParams.party_id || loading}>
-                {loading ? <i className="fa-solid fa-circle-notch fa-spin"></i> : <><i className="fa-solid fa-book-open me-2"></i> Load Ledger</>}
-              </button>
-              {!isGlobalView && (
-                <button type="button" className="btn btn-light border w-100 shadow-sm rounded-3 py-2 fw-bold text-muted" onClick={handleClearSelection}>
-                  <i className="fa-solid fa-arrow-left me-2"></i> Back to Global
-                </button>
-              )}
-            </div>
-          </form>
-        </div>
-      </div>
+          </div>
+      )}
 
-      {/* LEDGER DISPLAY TABLE */}
+      {/* LEDGER DISPLAY TABLE (Universal Layout) */}
       <div className="card border-0 shadow-sm rounded-4 overflow-hidden bg-white">
         <div className="card-header bg-white border-bottom-0 pt-4 pb-3 px-4 d-flex justify-content-between align-items-center">
           <h5 className="m-0 fw-bold text-dark">
             <i className={`fa-solid ${isGlobalView ? 'fa-globe' : 'fa-file-invoice-dollar'} text-secondary me-2`}></i>
             {isGlobalView ? 'Recent Global Transactions' : 'Statement of Account'}
           </h5>
-          {!isGlobalView && ledgerData.length > 0 && (
+
+          {/* Always show the Current Balance block for External Partners, or Admins viewing a specific partner */}
+          {(!isGlobalView) && (
             <div className="text-end">
               <span className="small text-muted text-uppercase fw-bold me-2">Current Balance:</span>
               <span className={`fs-4 fw-bolder ${ledgerBalance > 0 ? 'text-danger' : ledgerBalance < 0 ? 'text-success' : 'text-dark'}`}>
@@ -332,8 +379,8 @@ export default function FinanceMaster() {
         </div>
       </div>
 
-      {/* --- MODAL: RECEIVE PAYMENT --- */}
-      {isPaymentModalOpen && (
+      {/* --- MODAL: RECEIVE PAYMENT (Strictly Admin Only) --- */}
+      {isPaymentModalOpen && isAdminOrInternal && (
         <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(15, 23, 42, 0.6)', backdropFilter: 'blur(4px)' }}>
           <div className="modal-dialog modal-dialog-centered modal-lg">
             <div className="modal-content border-0 shadow-lg rounded-4 overflow-hidden">

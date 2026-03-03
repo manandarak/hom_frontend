@@ -1,24 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import api from '../api';
 import toast, { Toaster } from 'react-hot-toast';
+import { AuthContext } from '../context/AuthContext';
 
 export default function InventoryMaster() {
   const [activeTab, setActiveTab] = useState('factory'); // 'factory', 'ss', 'ledger'
   const [loading, setLoading] = useState(false);
 
-  // --- FIXED ROLE CHECK FOR ADMIN ---
-  let isAdmin = false;
-  try {
-    const storedUser = localStorage.getItem('user');
-    if (storedUser) {
-      const userObj = JSON.parse(storedUser);
-      // Grab the role name based on how your backend sends it (usually user.role.name)
-      const roleName = userObj?.role?.name || userObj?.role;
-      isAdmin = roleName === 'Admin';
-    }
-  } catch (e) {
-    console.error("Error parsing user role:", e);
-  }
+  // --- BULLETPROOF RBAC LOGIC ---
+  const { user } = useContext(AuthContext);
+  const roleName = typeof user?.role === 'object' ? user?.role?.name : user?.role;
+  const isAdmin = roleName?.toLowerCase() === 'admin';
+  const userPerms = user?.permissions || [];
+  const canManageInventory = isAdmin || userPerms.includes('manage_inventory');
 
   // --- HYDRATED MASTER DATA ---
   const [masterData, setMasterData] = useState({
@@ -281,12 +275,17 @@ export default function InventoryMaster() {
             </button>
           )}
 
-          <button className="btn btn-dark shadow-sm rounded-pill px-4 fw-semibold" onClick={() => setIsAdjustModalOpen(true)}>
-            <i className="fa-solid fa-scale-unbalanced me-2"></i> Audit / Adjust
-          </button>
-          <button className="btn btn-primary shadow-sm rounded-pill px-4 fw-semibold" onClick={() => setIsProduceModalOpen(true)}>
-            <i className="fa-solid fa-industry me-2"></i> Log Production
-          </button>
+          {/* REQUIRE PERMISSION FOR INVENTORY CHANGES */}
+          {canManageInventory && (
+            <>
+              <button className="btn btn-dark shadow-sm rounded-pill px-4 fw-semibold" onClick={() => setIsAdjustModalOpen(true)}>
+                <i className="fa-solid fa-scale-unbalanced me-2"></i> Audit / Adjust
+              </button>
+              <button className="btn btn-primary shadow-sm rounded-pill px-4 fw-semibold" onClick={() => setIsProduceModalOpen(true)}>
+                <i className="fa-solid fa-industry me-2"></i> Log Production
+              </button>
+            </>
+          )}
         </div>
       </div>
 

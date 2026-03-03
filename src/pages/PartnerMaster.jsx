@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import api from '../api';
 import toast, { Toaster } from 'react-hot-toast';
+import { AuthContext } from '../context/AuthContext';
 
 const initialFormState = {
   name: '',
@@ -17,6 +18,13 @@ export default function PartnerMaster() {
   const [partners, setPartners] = useState({ ss: [], distributors: [], retailers: [] });
   const [activeTab, setActiveTab] = useState('ss'); // ss, distributors, retailers
   const [loading, setLoading] = useState(true);
+
+  // --- BULLETPROOF RBAC LOGIC ---
+  const { user } = useContext(AuthContext);
+  const roleName = typeof user?.role === 'object' ? user?.role?.name : user?.role;
+  const isAdmin = roleName?.toLowerCase() === 'admin';
+  const userPerms = user?.permissions || [];
+  const canManagePartners = isAdmin || userPerms.includes('manage_partners');
 
   // --- CASCADING GEO STATE ---
   const [geoMaster, setGeoMaster] = useState({
@@ -263,7 +271,6 @@ export default function PartnerMaster() {
            (p.gstin && p.gstin.toLowerCase().includes(searchQuery.toLowerCase()));
   });
 
-
   return (
     <div className="container-fluid p-4" style={{ backgroundColor: '#f8f9fa', minHeight: '100vh' }}>
       <Toaster position="top-right" toastOptions={{ style: { borderRadius: '10px', background: '#333', color: '#fff' } }} />
@@ -276,9 +283,13 @@ export default function PartnerMaster() {
           </h3>
           <p className="text-muted m-0 mt-1">Manage and provision your supply chain network nodes.</p>
         </div>
-        <button className="btn btn-primary btn-lg shadow-sm rounded-pill px-4 fw-semibold" onClick={() => setIsModalOpen(true)}>
-          <i className="fa-solid fa-plus me-2"></i> Add {activeTab === 'ss' ? 'Super Stockist' : activeTab.slice(0, -1)}
-        </button>
+
+        {/* ADD BUTTON SECURED */}
+        {canManagePartners && (
+          <button className="btn btn-primary btn-lg shadow-sm rounded-pill px-4 fw-semibold" onClick={() => setIsModalOpen(true)}>
+            <i className="fa-solid fa-plus me-2"></i> Add {activeTab === 'ss' ? 'Super Stockist' : activeTab.slice(0, -1)}
+          </button>
+        )}
       </div>
 
       {/* METRIC CARDS */}
@@ -343,15 +354,18 @@ export default function PartnerMaster() {
                 <th className="py-3 text-uppercase text-muted fw-bold border-bottom-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>Contact</th>
                 <th className="py-3 text-uppercase text-muted fw-bold border-bottom-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>Geography Level</th>
                 <th className="py-3 text-uppercase text-muted fw-bold border-bottom-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>GSTIN</th>
-                <th className="text-end px-4 py-3 text-uppercase text-muted fw-bold border-bottom-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>Actions</th>
+                {/* TABLE HEADER SECURED */}
+                {canManagePartners && (
+                  <th className="text-end px-4 py-3 text-uppercase text-muted fw-bold border-bottom-0" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>Actions</th>
+                )}
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan="6" className="text-center py-5"><div className="spinner-border text-primary" role="status"></div></td></tr>
+                <tr><td colSpan={canManagePartners ? "6" : "5"} className="text-center py-5"><div className="spinner-border text-primary" role="status"></div></td></tr>
               ) : filteredList.length === 0 ? (
                 <tr>
-                  <td colSpan="6" className="text-center py-5 bg-light bg-opacity-50">
+                  <td colSpan={canManagePartners ? "6" : "5"} className="text-center py-5 bg-light bg-opacity-50">
                     <div className="text-muted mb-3"><i className="fa-solid fa-box-open fs-1 opacity-25"></i></div>
                     <h5 className="text-muted fw-bold">No Records Found</h5>
                   </td>
@@ -383,11 +397,15 @@ export default function PartnerMaster() {
                     )}
                   </td>
                   <td>{p.gstin ? <code className="text-primary bg-primary bg-opacity-10 px-2 py-1 rounded border border-primary border-opacity-25">{p.gstin}</code> : <span className="text-muted small">-</span>}</td>
-                  <td className="text-end px-4" style={{ minWidth: '160px' }}>
-                    <button className="btn btn-light btn-sm rounded-circle me-2 text-primary shadow-sm" onClick={() => openEditModal(p)}><i className="fa-solid fa-pen-to-square"></i></button>
-                    <button className={`btn btn-light btn-sm rounded-circle me-2 shadow-sm ${p.is_active ? 'text-warning' : 'text-success'}`} onClick={() => togglePartnerStatus(p.id, p.is_active)}><i className={`fa-solid ${p.is_active ? 'fa-pause' : 'fa-play'}`}></i></button>
-                    <button className="btn btn-light btn-sm rounded-circle text-danger shadow-sm" onClick={() => handleDeletePartner(p.id, p)}><i className="fa-regular fa-trash-can"></i></button>
-                  </td>
+
+                  {/* TABLE ACTIONS SECURED */}
+                  {canManagePartners && (
+                    <td className="text-end px-4" style={{ minWidth: '160px' }}>
+                      <button className="btn btn-light btn-sm rounded-circle me-2 text-primary shadow-sm" onClick={() => openEditModal(p)}><i className="fa-solid fa-pen-to-square"></i></button>
+                      <button className={`btn btn-light btn-sm rounded-circle me-2 shadow-sm ${p.is_active ? 'text-warning' : 'text-success'}`} onClick={() => togglePartnerStatus(p.id, p.is_active)}><i className={`fa-solid ${p.is_active ? 'fa-pause' : 'fa-play'}`}></i></button>
+                      <button className="btn btn-light btn-sm rounded-circle text-danger shadow-sm" onClick={() => handleDeletePartner(p.id, p)}><i className="fa-regular fa-trash-can"></i></button>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>

@@ -5,6 +5,7 @@ import toast, { Toaster } from 'react-hot-toast';
 const initialUserForm = {
   username: '',
   email: '',
+  phone_number: '',
   password: '',
   role_id: '',
   is_active: true,
@@ -13,6 +14,51 @@ const initialUserForm = {
   assigned_region_id: '',
   assigned_area_id: '',
   assigned_territory_id: ''
+};
+
+  const formatPermissionName = (name) => {
+  if (!name) return 'Unknown';
+  return name.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+};
+
+const categorizePermissions = (permissions) => {
+  const groups = {
+    "Dashboards & Analytics": { icon: "fa-chart-pie text-info", perms: [] },
+    "Order Management": { icon: "fa-cart-shopping text-success", perms: [] },
+    "Fulfillment & Logistics": { icon: "fa-truck-fast text-warning", perms: [] },
+    "Inventory Management": { icon: "fa-boxes-stacked text-primary", perms: [] },
+    "Finance & Commercials": { icon: "fa-file-invoice-dollar text-danger", perms: [] },
+    "Catalog & Schemes": { icon: "fa-tags text-secondary", perms: [] },
+    "Network & Administration": { icon: "fa-network-wired text-dark", perms: [] },
+    "Other/Uncategorized": { icon: "fa-layer-group text-muted", perms: [] }
+  };
+
+  permissions.forEach(perm => {
+    const name = perm.name.toLowerCase();
+    if (name.includes('dashboard') || name.includes('report') || name.includes('export')) {
+      groups["Dashboards & Analytics"].perms.push(perm);
+    } else if (name.includes('order')) {
+      groups["Order Management"].perms.push(perm);
+    } else if (name.includes('dispatch') || name.includes('receive') || name.includes('logistic')) {
+      groups["Fulfillment & Logistics"].perms.push(perm);
+    } else if (name.includes('inventory')) {
+      groups["Inventory Management"].perms.push(perm);
+    } else if (name.includes('invoice') || name.includes('payment') || name.includes('credit') || name.includes('ledger')) {
+      groups["Finance & Commercials"].perms.push(perm);
+    } else if (name.includes('product') || name.includes('batch') || name.includes('scheme')) {
+      groups["Catalog & Schemes"].perms.push(perm);
+    } else if (name.includes('partner') || name.includes('geography') || name.includes('user') || name.includes('role')) {
+      groups["Network & Administration"].perms.push(perm);
+    } else {
+      groups["Other/Uncategorized"].perms.push(perm);
+    }
+  });
+
+  Object.keys(groups).forEach(key => {
+    if (groups[key].perms.length === 0) delete groups[key];
+  });
+
+  return groups;
 };
 
 export default function UserMatrix() {
@@ -38,25 +84,23 @@ export default function UserMatrix() {
   const [matrixState, setMatrixState] = useState({});
   const [dirtyRoles, setDirtyRoles] = useState(new Set());
 
-  // --- BULLETPROOF API FETCHERS ---
   const fetchData = async () => {
     setLoading(true);
     try {
-      // Individual catches prevent the whole page from crashing!
       const [usersRes, rolesRes, permsRes, zonesRes] = await Promise.all([
         api.get('/users/').catch(err => {
             console.error("Users API crashed:", err);
-            toast.error("Failed to load Users (Check Terminal)");
+            toast.error("Failed to load Users");
             return { data: [] };
         }),
         api.get('/users/roles').catch(err => {
             console.error("Roles API crashed:", err);
-            toast.error("Failed to load Roles (Check Terminal)");
+            toast.error("Failed to load Roles");
             return { data: [] };
         }),
         api.get('/users/permissions').catch(err => {
             console.error("Permissions API crashed:", err);
-            toast.error("Failed to load Permissions (Check Terminal)");
+            toast.error("Failed to load Permissions");
             return { data: [] };
         }),
         api.get('/geo/zones').catch(() => ({ data: [] }))
@@ -144,6 +188,7 @@ export default function UserMatrix() {
       setUserForm({
         username: user.username || '',
         email: user.email || '',
+        phone_number: user.phone_number || '',
         password: '',
         role_id: user.role_id || '',
         is_active: user.is_active !== undefined ? user.is_active : true,
@@ -250,8 +295,11 @@ export default function UserMatrix() {
 
   const filteredUsers = users.filter(u =>
     (u.username && u.username.toLowerCase().includes(searchQuery.toLowerCase())) ||
-    (u.email && u.email.toLowerCase().includes(searchQuery.toLowerCase()))
+    (u.email && u.email.toLowerCase().includes(searchQuery.toLowerCase())) ||
+    (u.phone_number && u.phone_number.includes(searchQuery))
   );
+
+  const groupedPermissions = categorizePermissions(permissions);
 
   return (
     <div className="container-fluid p-4" style={{ backgroundColor: '#f4f7f8', minHeight: '100vh' }}>
@@ -313,6 +361,7 @@ export default function UserMatrix() {
       </div>
 
       <div className="card border-0 shadow-sm rounded-4 overflow-hidden bg-white">
+
         {activeTab === 'users' && (
           <div className="table-responsive">
             <table className="table table-hover align-middle mb-0">
@@ -352,7 +401,8 @@ export default function UserMatrix() {
                           <img src={`https://ui-avatars.com/api/?name=${u.username}&background=eff6ff&color=1d4ed8&bold=true`} className="rounded-circle me-3 border border-2 border-white shadow-sm" width="45" alt="Avatar"/>
                           <div>
                             <div className="fw-bolder text-dark fs-6">{u.username}</div>
-                            <small className="text-muted fw-medium"><i className="fa-regular fa-envelope me-1"></i> {u.email || 'N/A'}</small>
+                            <small className="text-muted fw-medium d-block"><i className="fa-regular fa-envelope me-1"></i> {u.email || 'N/A'}</small>
+                            <small className="text-muted fw-medium d-block"><i className="fa-solid fa-phone me-1"></i> {u.phone_number || 'N/A'}</small>
                           </div>
                         </div>
                       </td>
@@ -388,61 +438,93 @@ export default function UserMatrix() {
         )}
 
         {activeTab === 'matrix' && (
-          <div className="table-responsive">
-            <table className="table table-bordered table-hover align-middle mb-0 text-center">
-              <thead className="bg-dark text-white">
+          <div className="table-responsive" style={{ maxHeight: '75vh' }}>
+            <table className="table table-hover align-middle mb-0 text-center" style={{ borderCollapse: 'separate', borderSpacing: 0 }}>
+
+              <thead className="bg-light text-dark shadow-sm" style={{ position: 'sticky', top: 0, zIndex: 10 }}>
                 <tr>
-                  <th className="text-start px-4 py-3 border-secondary" style={{ width: '25%' }}>System Capabilities</th>
+                  <th className="text-start px-4 py-4 border-bottom" style={{ width: '30%', backgroundColor: '#f8f9fa' }}>
+                    <div className="fs-6 fw-bold text-uppercase text-primary" style={{ letterSpacing: '1px' }}>System Capabilities</div>
+                    <div className="fw-normal text-muted small mt-1">Check boxes to grant module access</div>
+                  </th>
                   {roles.map(r => (
-                    <th key={r.id} className="py-3 border-secondary text-uppercase" style={{ letterSpacing: '1px', fontSize: '0.85rem' }}>
+                    <th key={r.id} className="py-4 border-bottom border-start border-opacity-25" style={{ backgroundColor: '#f8f9fa', minWidth: '130px' }}>
                       <div className="d-flex flex-column align-items-center">
-                         <i className="fa-solid fa-user-shield text-warning mb-1 fs-5"></i>
-                         {r.name}
+                         <i className="fa-solid fa-shield-halved text-primary mb-2 fs-4"></i>
+                         <span className="text-uppercase fw-bolder text-dark" style={{ letterSpacing: '1px', fontSize: '0.85rem' }}>{r.name}</span>
                       </div>
                     </th>
                   ))}
                 </tr>
               </thead>
+
               <tbody>
                 {loading ? (
                   <tr><td colSpan={roles.length + 1} className="text-center py-5"><div className="spinner-border text-primary"></div></td></tr>
                 ) : permissions.length === 0 ? (
                   <tr>
-                    <td colSpan={roles.length + 1} className="text-center py-5">
+                    <td colSpan={roles.length + 1} className="text-center py-5 bg-light">
                       <div className="text-muted mb-3">
                         <i className="fa-solid fa-database fs-1 opacity-25"></i>
                       </div>
                       <h5 className="fw-bold text-dark">Database is missing core permissions!</h5>
                       <p className="text-muted small">You recently reset the database. You need to seed the default permissions.</p>
-                      <button className="btn btn-primary mt-2 shadow-sm fw-bold px-4 rounded-pill" onClick={handleSeedPermissions}>
-                        <i className="fa-solid fa-seedling me-2"></i> Seed Default Permissions
+                      <button className="btn btn-primary shadow-sm fw-bold px-4 rounded-pill mt-3" onClick={handleSeedPermissions}>
+                        <i className="fa-solid fa-seedling me-2"></i> Seed Master Permissions
                       </button>
                     </td>
                   </tr>
-                ) : permissions.map(perm => (
-                  <tr key={perm.id}>
-                    <td className="text-start px-4 py-3 bg-light border-end">
-                      <div className="fw-bolder text-dark" style={{ fontSize: '0.9rem' }}>{perm.name || perm.codename}</div>
-                      {perm.description && <div className="text-muted small mt-1">{perm.description}</div>}
-                    </td>
-                    {roles.map(role => {
-                       const hasPermission = matrixState[role.id]?.includes(perm.id) || false;
-                       return (
-                         <td key={`${role.id}-${perm.id}`}
-                             className={`cursor-pointer transition-all ${hasPermission ? 'bg-success bg-opacity-10' : ''}`}
-                             onClick={() => toggleMatrixPermission(role.id, perm.id)}
-                         >
-                           <input
-                             type="checkbox"
-                             className="form-check-input fs-4 m-0 shadow-sm border-secondary border-opacity-25 cursor-pointer"
-                             checked={hasPermission}
-                             onChange={() => toggleMatrixPermission(role.id, perm.id)}
-                             onClick={(e) => e.stopPropagation()}
-                           />
-                         </td>
-                       );
-                    })}
-                  </tr>
+                ) : Object.entries(groupedPermissions).map(([category, { icon, perms }]) => (
+                  <React.Fragment key={category}>
+                    <tr className="bg-light">
+                      <td colSpan={roles.length + 1} className="text-start px-4 py-3 fw-bolder text-dark border-bottom border-top" style={{ backgroundColor: '#eef2f5' }}>
+                        <i className={`fa-solid ${icon} me-2 fs-5 align-middle`}></i>
+                        <span className="text-uppercase align-middle" style={{ letterSpacing: '1px', fontSize: '0.85rem' }}>{category}</span>
+                      </td>
+                    </tr>
+
+                    {perms.map((perm, index) => (
+                      <tr key={perm.id} className={`transition-all ${index === perms.length - 1 ? 'border-bottom border-2' : ''}`}>
+                        <td className="text-start px-4 py-3 border-end bg-white">
+                          <div className="d-flex align-items-center">
+                            <i className="fa-solid fa-key text-muted me-3 opacity-25"></i>
+                            <div>
+                              <div className="fw-bolder text-dark" style={{ fontSize: '0.9rem' }}>{formatPermissionName(perm.name)}</div>
+                              {perm.description && <div className="text-muted mt-1" style={{ fontSize: '0.75rem', fontWeight: '500' }}>{perm.description}</div>}
+                            </div>
+                          </div>
+                        </td>
+                        {roles.map(role => {
+                           const hasPermission = matrixState[role.id]?.includes(perm.id) || false;
+                           const isAdmin = role.name.toLowerCase() === 'admin';
+                           const isChecked = isAdmin ? true : hasPermission;
+
+                           return (
+                             <td key={`${role.id}-${perm.id}`}
+                                 className={`border-end cursor-pointer transition-all ${isChecked ? 'bg-success bg-opacity-10' : 'bg-white hover-bg-light'}`}
+                                 onClick={() => !isAdmin && toggleMatrixPermission(role.id, perm.id)}
+                                 style={{ cursor: isAdmin ? 'not-allowed' : 'pointer' }}
+                             >
+                               <div className="d-flex justify-content-center align-items-center h-100">
+                                 {isAdmin ? (
+                                    <i className="fa-solid fa-circle-check text-success fs-4 opacity-75" title="Admins have all permissions by default"></i>
+                                 ) : (
+                                    <input
+                                      type="checkbox"
+                                      className="form-check-input fs-4 m-0 shadow-sm border-secondary border-opacity-25"
+                                      checked={isChecked}
+                                      onChange={() => toggleMatrixPermission(role.id, perm.id)}
+                                      onClick={(e) => e.stopPropagation()}
+                                      style={{ cursor: 'pointer' }}
+                                    />
+                                 )}
+                               </div>
+                             </td>
+                           );
+                        })}
+                      </tr>
+                    ))}
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>
@@ -470,7 +552,6 @@ export default function UserMatrix() {
 
                 <div className="modal-body p-4 bg-light">
                   <div className="row g-3">
-
                     <div className="col-12">
                       <label className="form-label small fw-bold text-uppercase text-muted mb-1">Username <span className="text-danger">*</span></label>
                       <div className="input-group bg-white rounded-3 shadow-sm border overflow-hidden">
@@ -478,13 +559,23 @@ export default function UserMatrix() {
                         <input type="text" className="form-control form-control-lg border-0 shadow-none fw-semibold" required value={userForm.username} onChange={e => setUserForm({...userForm, username: e.target.value})} />
                       </div>
                     </div>
-                    <div className="col-12">
+
+                    <div className="col-md-6">
                       <label className="form-label small fw-bold text-uppercase text-muted mb-1">Email Address</label>
                       <div className="input-group bg-white rounded-3 shadow-sm border overflow-hidden">
                         <span className="input-group-text bg-white border-0 text-muted"><i className="fa-solid fa-envelope"></i></span>
                         <input type="email" className="form-control border-0 shadow-none py-2" value={userForm.email} onChange={e => setUserForm({...userForm, email: e.target.value})} />
                       </div>
                     </div>
+
+                    <div className="col-md-6">
+                      <label className="form-label small fw-bold text-uppercase text-muted mb-1">Phone Number</label>
+                      <div className="input-group bg-white rounded-3 shadow-sm border overflow-hidden">
+                        <span className="input-group-text bg-white border-0 text-muted"><i className="fa-solid fa-phone"></i></span>
+                        <input type="tel" className="form-control border-0 shadow-none py-2" value={userForm.phone_number} onChange={e => setUserForm({...userForm, phone_number: e.target.value})} />
+                      </div>
+                    </div>
+
                     <div className="col-md-6">
                       <label className="form-label small fw-bold text-uppercase text-muted mb-1">
                         Password {editingUserId && <small className="text-info fw-normal">(Leave blank to keep)</small>} {!editingUserId && <span className="text-danger">*</span>}
@@ -494,6 +585,7 @@ export default function UserMatrix() {
                         <input type="password" className="form-control border-0 shadow-none py-2" required={!editingUserId} value={userForm.password} onChange={e => setUserForm({...userForm, password: e.target.value})} />
                       </div>
                     </div>
+
                     <div className="col-md-6">
                       <label className="form-label small fw-bold text-uppercase text-muted mb-1">Security Role <span className="text-danger">*</span></label>
                       <div className="input-group bg-white rounded-3 shadow-sm border overflow-hidden">
@@ -616,16 +708,16 @@ export default function UserMatrix() {
         </div>
       )}
 
-      {/* Global Style for Blink Animation */}
+      {/* Global Styles */}
       <style>{`
         @keyframes pulse {
           0% { box-shadow: 0 0 0 0 rgba(25, 135, 84, 0.7); }
           70% { box-shadow: 0 0 0 10px rgba(25, 135, 84, 0); }
           100% { box-shadow: 0 0 0 0 rgba(25, 135, 84, 0); }
         }
-        .blink-animation {
-          animation: pulse 2s infinite;
-        }
+        .blink-animation { animation: pulse 2s infinite; }
+        .hover-bg-light:hover { background-color: #f8f9fa !important; }
+        .drop-shadow { filter: drop-shadow(0px 2px 2px rgba(0,0,0,0.3)); }
       `}</style>
     </div>
   );

@@ -51,24 +51,23 @@ export default function MainLayout() {
     navigate('/login');
   };
 
-  // --- RBAC Logic ---
-  // Ensure we safely default to "Admin" if no role is explicitly caught,
-  // though in production you might default to a lowest-privilege view.
-  const userRole = user?.role || "Admin";
+  // --- BULLETPROOF RBAC LOGIC ---
+  const userPerms = user?.permissions || [];
 
-  // Core Infra - Highly Restricted
-  const canViewGeo = userRole === "Admin";
-  const canViewProducts = userRole === "Admin";
-  const canViewUsers = userRole === "Admin";
+  // Note: Depending on your backend, user.role might be an object {name: 'Admin'} or a string 'Admin'
+  const roleName = typeof user?.role === 'object' ? user?.role?.name : user?.role;
+  const isAdmin = roleName?.toLowerCase() === 'admin';
 
-  // Partner Matrix - Visible to higher internal hierarchy
-  const canViewPartners = ["Admin", "ZSM", "RSM", "ASM"].includes(userRole);
+  // Core Infra - Checks permissions OR overrides if Admin
+  const canViewGeo = isAdmin || userPerms.includes("view_geography");
+  const canViewProducts = isAdmin || userPerms.includes("view_products");
+  const canViewPartners = isAdmin || userPerms.includes("view_partners");
+  const canViewUsers = isAdmin || userPerms.includes("view_users") || userPerms.includes("manage_users");
 
-  // Operations & Execution - Visible to ALL valid users
-  // (Data is now geographically scoped safely by the backend APIs!)
-  const canViewInventory = true;
-  const canViewFinance = true;
-  const canViewOrders = true;
+  // Operations & Execution - Dynamically driven by the Permission Matrix
+  const canViewInventory = isAdmin || userPerms.includes("view_inventory");
+  const canViewFinance = isAdmin || userPerms.includes("view_invoices") || userPerms.includes("view_ledgers");
+  const canViewOrders = isAdmin || userPerms.includes("view_all_orders") || userPerms.includes("view_own_orders") || userPerms.includes("create_primary_order") || userPerms.includes("create_secondary_order");
 
   const showCoreInfra = canViewGeo || canViewProducts || canViewPartners || canViewUsers;
   const showOperations = canViewInventory || canViewFinance;
@@ -102,6 +101,7 @@ export default function MainLayout() {
         {/* NAVIGATION LINKS */}
         <div className="flex-grow-1 overflow-auto py-3 custom-scrollbar">
           <ul className="nav flex-column mb-auto">
+            {/* Everyone gets a dashboard */}
             <li className="nav-item">
               <NavLink to="/" className={getNavLinkClass} end>
                 <i className="fa-solid fa-chart-pie me-3 fs-5" style={{ width: '24px' }}></i> Dashboard
@@ -162,7 +162,7 @@ export default function MainLayout() {
               <img src={`https://ui-avatars.com/api/?name=${user?.username || 'User'}&background=eff6ff&color=1d4ed8&bold=true`} className="rounded-circle border border-2 border-white shadow-sm me-2 flex-shrink-0" width="40" alt="Avatar"/>
               <div className="text-truncate" style={{ maxWidth: '130px' }}>
                 <div className="text-dark fw-bold text-truncate" style={{ fontSize: '0.85rem' }}>{user?.username || 'Unknown User'}</div>
-                <div className="text-primary fw-semibold" style={{ fontSize: '0.7rem' }}>Role: {user?.role || 'Admin'}</div>
+                <div className="text-primary fw-semibold text-truncate" style={{ fontSize: '0.7rem' }}>Role: {roleName || 'Admin'}</div>
               </div>
             </div>
             <button onClick={handleLogout} className="btn btn-light text-danger rounded-circle shadow-sm border border-danger border-opacity-25" style={{ width: '35px', height: '35px', flexShrink: 0 }} title="Logout">
@@ -180,30 +180,16 @@ export default function MainLayout() {
           <h5 className="m-0 fw-bolder text-dark" style={{ letterSpacing: '-0.5px' }}>Enterprise Gateway</h5>
 
           <div className="d-flex align-items-center gap-2">
-
-             {/* --- LANGUAGE SELECTION DROPDOWN --- */}
              <div className="dropdown">
-               <button
-                 className="btn btn-light dropdown-toggle d-flex align-items-center shadow-sm border rounded-pill px-3"
-                 type="button"
-                 id="languageDropdown"
-                 data-bs-toggle="dropdown"
-                 aria-expanded="false"
-                 style={{ height: '40px' }}
-               >
+               <button className="btn btn-light dropdown-toggle d-flex align-items-center shadow-sm border rounded-pill px-3" type="button" id="languageDropdown" data-bs-toggle="dropdown" aria-expanded="false" style={{ height: '40px' }}>
                  <i className="fa-solid fa-language fs-5 me-2 text-primary"></i>
-                 <span className="fw-semibold small d-none d-lg-inline">
-                   {languages.find(l => l.code === currentLang)?.name}
-                 </span>
+                 <span className="fw-semibold small d-none d-lg-inline">{languages.find(l => l.code === currentLang)?.name}</span>
                </button>
                <ul className="dropdown-menu dropdown-menu-end shadow border-0 mt-2" aria-labelledby="languageDropdown">
                  <li className="dropdown-header text-uppercase small fw-bold">Select Language</li>
                  {languages.map((lang) => (
                    <li key={lang.code}>
-                     <button
-                       className={`dropdown-item d-flex justify-content-between align-items-center py-2 ${currentLang === lang.code ? 'active bg-primary text-white' : ''}`}
-                       onClick={() => handleLanguageChange(lang.code)}
-                     >
+                     <button className={`dropdown-item d-flex justify-content-between align-items-center py-2 ${currentLang === lang.code ? 'active bg-primary text-white' : ''}`} onClick={() => handleLanguageChange(lang.code)}>
                        <span>{lang.name} <small className="opacity-75 ms-1">({lang.label})</small></span>
                        {currentLang === lang.code && <i className="fa-solid fa-check ms-2 fs-xs"></i>}
                      </button>
@@ -212,13 +198,7 @@ export default function MainLayout() {
                </ul>
              </div>
 
-             {/* --- THEME TOGGLE BUTTON --- */}
-             <button
-               onClick={toggleTheme}
-               className="btn btn-light rounded-circle shadow-sm border"
-               style={{ width: '40px', height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-               title={isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
-             >
+             <button onClick={toggleTheme} className="btn btn-light rounded-circle shadow-sm border" style={{ width: '40px', height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center' }} title={isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}>
                 <i className={`fa-solid ${isDarkMode ? 'fa-sun text-warning fs-5' : 'fa-moon text-secondary fs-5'}`}></i>
              </button>
 

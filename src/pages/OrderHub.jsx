@@ -6,7 +6,7 @@ import { AuthContext } from '../context/AuthContext';
 export default function OrderHub() {
   const { user } = useContext(AuthContext);
 
-  const defaultTab = user?.role === 'Retailer' ? 'tertiary' : 'primary';
+  const defaultTab = user?.role === 'Retailer' ? 'tertiary' : user?.role === 'Distributor' ? 'secondary' : 'primary';
   const [activeTab, setActiveTab] = useState(defaultTab);
   const [loading, setLoading] = useState(false);
   const [openDropdownId, setOpenDropdownId] = useState(null);
@@ -55,18 +55,25 @@ export default function OrderHub() {
     return errorMsg;
   };
 
-  // --- RBAC PERMISSIONS ---
-  const isAdminOrInternal = ['Admin', 'ZSM', 'RSM', 'ASM', 'SO'].includes(user?.role);
-  const canViewPrimary = isAdminOrInternal || ['SuperStockist', 'Distributor'].includes(user?.role);
-  const canViewSecondary = isAdminOrInternal || ['Distributor', 'Retailer'].includes(user?.role);
-  const canViewTertiary = isAdminOrInternal || ['Retailer'].includes(user?.role);
+  // --- STRICT HIERARCHICAL RBAC PERMISSIONS ---
+  const isAdmin = user?.role === 'Admin';
+  const isPartner = ['SuperStockist', 'Distributor', 'Retailer'].includes(user?.role);
 
-  const canPlacePrimary = isAdminOrInternal || user?.role === 'SuperStockist' || user?.permissions?.includes('create_primary_order');
-  const canPlaceSecondary = isAdminOrInternal || user?.role === 'Distributor' || user?.permissions?.includes('create_secondary_order');
-  const canPlaceTertiary = isAdminOrInternal || user?.role === 'Retailer' || user?.permissions?.includes('create_tertiary_order');
-  const canManageConsumers = isAdminOrInternal || user?.role === 'Retailer';
+  // Viewing: Internal teams can view all pipelines, Partners view their adjacent pipelines.
+  const canViewPrimary = isAdmin || ['ZSM', 'RSM', 'ASM', 'SO', 'SuperStockist', 'Distributor'].includes(user?.role);
+  const canViewSecondary = isAdmin || ['ZSM', 'RSM', 'ASM', 'SO', 'Distributor', 'Retailer'].includes(user?.role);
+  const canViewTertiary = isAdmin || ['ZSM', 'RSM', 'ASM', 'SO', 'Retailer'].includes(user?.role);
 
-  const canPlaceOrderInCurrentTab = (activeTab === 'primary' && canPlacePrimary) || (activeTab === 'secondary' && canPlaceSecondary) || (activeTab === 'tertiary' && canPlaceTertiary);
+  // Placing Orders: Strictly locked to their organizational level
+  const canPlacePrimary = isAdmin || user?.role === 'SuperStockist' || user?.role === 'ZSM';
+  const canPlaceSecondary = isAdmin || user?.role === 'Distributor' || ['RSM', 'ASM'].includes(user?.role);
+  const canPlaceTertiary = isAdmin || user?.role === 'Retailer' || user?.role === 'SO';
+  const canManageConsumers = isAdmin || user?.role === 'Retailer' || user?.role === 'SO';
+
+  const canPlaceOrderInCurrentTab =
+    (activeTab === 'primary' && canPlacePrimary) ||
+    (activeTab === 'secondary' && canPlaceSecondary) ||
+    (activeTab === 'tertiary' && canPlaceTertiary);
 
   useEffect(() => {
     const fetchMasterData = async () => {
@@ -150,7 +157,7 @@ export default function OrderHub() {
       setGeoMaster(prev => ({ ...prev, states: [], regions: [], areas: [], territories: [] }));
       if (value) {
         const res = await api.get(`/geo/zones/${value}/states`).catch(() => ({ data: [] }));
-        setGeoMaster(prev => ({ ...prev, states: Array.isArray(res.data) ? res.data : res.data.items || [] }));
+        setGeoMaster(prev => ({ ...prev, states: Array.isArray(res.data) ? res.data : (res.data.items || []) }));
       }
     }
     else if (field === 'state_id') {
@@ -158,7 +165,7 @@ export default function OrderHub() {
       setGeoMaster(prev => ({ ...prev, regions: [], areas: [], territories: [] }));
       if (value) {
         const res = await api.get(`/geo/states/${value}/regions`).catch(() => ({ data: [] }));
-        setGeoMaster(prev => ({ ...prev, regions: Array.isArray(res.data) ? res.data : res.data.items || [] }));
+        setGeoMaster(prev => ({ ...prev, regions: Array.isArray(res.data) ? res.data : (res.data.items || []) }));
       }
     }
     else if (field === 'region_id') {
@@ -166,7 +173,7 @@ export default function OrderHub() {
       setGeoMaster(prev => ({ ...prev, areas: [], territories: [] }));
       if (value) {
         const res = await api.get(`/geo/regions/${value}/areas`).catch(() => ({ data: [] }));
-        setGeoMaster(prev => ({ ...prev, areas: Array.isArray(res.data) ? res.data : res.data.items || [] }));
+        setGeoMaster(prev => ({ ...prev, areas: Array.isArray(res.data) ? res.data : (res.data.items || []) }));
       }
     }
     else if (field === 'area_id') {
@@ -174,7 +181,7 @@ export default function OrderHub() {
       setGeoMaster(prev => ({ ...prev, territories: [] }));
       if (value) {
         const res = await api.get(`/geo/areas/${value}/territories`).catch(() => ({ data: [] }));
-        setGeoMaster(prev => ({ ...prev, territories: Array.isArray(res.data) ? res.data : res.data.items || [] }));
+        setGeoMaster(prev => ({ ...prev, territories: Array.isArray(res.data) ? res.data : (res.data.items || []) }));
       }
     }
     else if (field === 'territory_id') {
@@ -189,7 +196,7 @@ export default function OrderHub() {
       setConsumerGeoMaster({ states: [], regions: [], areas: [], territories: [] });
       if (value) {
         const res = await api.get(`/geo/zones/${value}/states`).catch(() => ({ data: [] }));
-        setConsumerGeoMaster(prev => ({ ...prev, states: Array.isArray(res.data) ? res.data : res.data.items || [] }));
+        setConsumerGeoMaster(prev => ({ ...prev, states: Array.isArray(res.data) ? res.data : (res.data.items || []) }));
       }
     }
     else if (field === 'state_id') {
@@ -198,7 +205,7 @@ export default function OrderHub() {
       setConsumerGeoMaster(prev => ({ ...prev, regions: [], areas: [], territories: [] }));
       if (value) {
         const res = await api.get(`/geo/states/${value}/regions`).catch(() => ({ data: [] }));
-        setConsumerGeoMaster(prev => ({ ...prev, regions: Array.isArray(res.data) ? res.data : res.data.items || [] }));
+        setConsumerGeoMaster(prev => ({ ...prev, regions: Array.isArray(res.data) ? res.data : (res.data.items || []) }));
       }
     }
     else if (field === 'region_id') {
@@ -207,7 +214,7 @@ export default function OrderHub() {
       setConsumerGeoMaster(prev => ({ ...prev, areas: [], territories: [] }));
       if (value) {
         const res = await api.get(`/geo/regions/${value}/areas`).catch(() => ({ data: [] }));
-        setConsumerGeoMaster(prev => ({ ...prev, areas: Array.isArray(res.data) ? res.data : res.data.items || [] }));
+        setConsumerGeoMaster(prev => ({ ...prev, areas: Array.isArray(res.data) ? res.data : (res.data.items || []) }));
       }
     }
     else if (field === 'area_id') {
@@ -216,7 +223,7 @@ export default function OrderHub() {
       setConsumerGeoMaster(prev => ({ ...prev, territories: [] }));
       if (value) {
         const res = await api.get(`/geo/areas/${value}/territories`).catch(() => ({ data: [] }));
-        setConsumerGeoMaster(prev => ({ ...prev, territories: Array.isArray(res.data) ? res.data : res.data.items || [] }));
+        setConsumerGeoMaster(prev => ({ ...prev, territories: Array.isArray(res.data) ? res.data : (res.data.items || []) }));
       }
     }
   };
@@ -242,7 +249,7 @@ export default function OrderHub() {
     }
     else if (targetTier === 'consumer') {
         let list = masterData.consumers;
-        if (geoFilter.territory_id) list = list.filter(c => c.territory_id === parseInt(geoFilter.territory_id));
+        if (geoFilter.territory_id) list = list.filter(c => parseInt(c.territory_id) === parseInt(geoFilter.territory_id));
         return list;
     }
     return [];
@@ -329,7 +336,7 @@ export default function OrderHub() {
       payload = {
         end_consumer_id: parseInt(orderForm.to_id),
         fulfilled_by_retailer_id: parseInt(orderForm.from_id),
-        assigned_so_id: 1, // Defaulting to 1 for dummy data, backend maps it properly
+        assigned_so_id: 1,
         product_id: parseInt(orderForm.product_id),
         quantity: parseInt(orderForm.quantity),
         batch_number: orderForm.batch_number
@@ -371,11 +378,9 @@ export default function OrderHub() {
     }
   };
 
-  // --- UPDATED ACTION WORKFLOW ---
   const handleOrderStatus = async (action, orderId, isConfirmed = false) => {
     setOpenDropdownId(null);
 
-    // Apply confirmation logic to both Secondary and Tertiary approvals
     if (action === 'approve' && (activeTab === 'secondary' || activeTab === 'tertiary') && !isConfirmed) {
       setApproveConfirmId(orderId);
       return;
@@ -420,7 +425,13 @@ export default function OrderHub() {
             </button>
           ) : activeTab !== 'consumers' && canPlaceOrderInCurrentTab ? (
             <button className="btn btn-primary shadow-sm rounded-pill px-4 fw-semibold" onClick={() => {
-              setOrderForm({ from_id: '', to_id: '', product_id: '', quantity: '', batch_number: '' });
+              // Pre-fill "from_id" for partners and disable the dropdown later
+              let prefillFromId = '';
+              if (isPartner) {
+                  const partnerList = user?.role === 'SuperStockist' ? masterData.ss : user?.role === 'Distributor' ? masterData.distributors : masterData.retailers;
+                  if (partnerList.length > 0) prefillFromId = partnerList[0].id.toString();
+              }
+              setOrderForm({ from_id: prefillFromId, to_id: '', product_id: '', quantity: '', batch_number: '' });
               setGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: '' });
               setIsOrderModalOpen(true);
             }}>
@@ -528,7 +539,6 @@ export default function OrderHub() {
                 : orders.length === 0 ? <tr><td colSpan="5" className="text-center py-5 text-muted fw-bold"><i className="fa-solid fa-receipt fs-1 mb-3 opacity-25 d-block"></i> No {activeTab} pipeline data found.</td></tr>
                 : orders.map(o => {
 
-                  // --- 1. EXACT DESTINATION IDENTIFICATION ---
                   let destId = null;
                   let targetTier = 'consumer';
 
@@ -539,20 +549,19 @@ export default function OrderHub() {
                     destId = o.retailer_id;
                     targetTier = 'retailer';
                   } else if (activeTab === 'tertiary') {
-                    destId = o.end_consumer_id; // Maps correctly from backend
+                    destId = o.end_consumer_id;
                     targetTier = 'consumer';
                   }
 
                   const destName = destId ? getPartnerName(targetTier, destId) : 'Destination Pending...';
 
-                  // --- 2. EXACT ORIGIN IDENTIFICATION ---
                   let originName = '🏭 Main Factory';
                   if (activeTab === 'primary' && o.type === 'SS_TO_DB') {
                       originName = getPartnerName('ss', o.from_entity_id);
                   } else if (activeTab === 'secondary') {
                       originName = getPartnerName('distributor', o.distributor_id);
                   } else if (activeTab === 'tertiary') {
-                      originName = getPartnerName('retailer', o.fulfilled_by_retailer_id); // Maps correctly from backend
+                      originName = getPartnerName('retailer', o.fulfilled_by_retailer_id);
                   }
 
                   const itemInfo = o.items && o.items.length > 0 ? o.items[0] : null;
@@ -564,15 +573,15 @@ export default function OrderHub() {
                   const displayStatus = o.status || 'LOGGED';
                   const isDispatched = (displayStatus === 'DISPATCHED' || displayStatus === 'Dispatched');
 
-                  const canDispatchPrimary = isAdminOrInternal || (activeTab === 'primary' && user?.role === 'SuperStockist');
-                  const canReceivePrimary = isAdminOrInternal || (activeTab === 'primary' && ['SuperStockist', 'Distributor'].includes(user?.role));
+                  const canDispatchPrimary = isAdmin || (activeTab === 'primary' && user?.role === 'SuperStockist');
+                  const canReceivePrimary = isAdmin || (activeTab === 'primary' && ['SuperStockist', 'Distributor'].includes(user?.role));
 
-                  const canApproveSecondary = isAdminOrInternal || (activeTab === 'secondary' && user?.role === 'Distributor');
-                  const canDispatchSecondary = isAdminOrInternal || (activeTab === 'secondary' && user?.role === 'Distributor');
-                  const canReceiveSecondary = isAdminOrInternal || (activeTab === 'secondary' && user?.role === 'Retailer');
+                  const canApproveSecondary = isAdmin || (activeTab === 'secondary' && user?.role === 'Distributor');
+                  const canDispatchSecondary = isAdmin || (activeTab === 'secondary' && user?.role === 'Distributor');
+                  const canReceiveSecondary = isAdmin || (activeTab === 'secondary' && user?.role === 'Retailer');
 
                   // STRICT ENFORCEMENT: Only the SO role can view/click the Authenticate & Approve button
-                  const canApproveTertiary = activeTab === 'tertiary' && user?.role === 'SO';
+                  const canApproveTertiary = activeTab === 'tertiary' && (user?.role === 'SO' || isAdmin);
 
                   const needsAction =
                     (displayStatus === 'Pending' || displayStatus === 'PENDING') ||
@@ -622,7 +631,6 @@ export default function OrderHub() {
                           isDispatched ? 'fa-truck-fast' : 
                           displayStatus === 'RECEIVED' || displayStatus === 'Received' || displayStatus === 'FULFILLED' ? 'fa-check-double' : 
                           'fa-ban'} me-1`}></i>
-                        {/* Beautifully formats "Approved_by_SO" into "Approved (SO)" for the user UI */}
                         {displayStatus.replace('_by_SO', ' (SO)')}
                       </span>
                     </td>
@@ -754,7 +762,7 @@ export default function OrderHub() {
               <div className="modal-footer border-0 p-4 bg-white">
                 <button type="button" className="btn btn-light fw-semibold px-4 rounded-pill" onClick={() => setApproveConfirmId(null)}>Cancel</button>
                 <button type="button" className="btn btn-danger fw-bold px-5 rounded-pill shadow-sm" onClick={() => {
-                  handleOrderStatus('approve', approveConfirmId, true); // bypasses the popup check
+                  handleOrderStatus('approve', approveConfirmId, true);
                   setApproveConfirmId(null);
                 }}>
                   <i className="fa-solid fa-check-double me-2"></i> Confirm Authentication
@@ -788,9 +796,20 @@ export default function OrderHub() {
                       <div className="col-12 mb-2">
                         <label className="form-label small fw-bold text-uppercase text-muted mb-2">Primary Route Vector <span className="text-danger">*</span></label>
                         <div className="btn-group w-100 shadow-sm" role="group">
-                          <button type="button" className={`btn ${primaryRouting === 'FACTORY_TO_SS' ? 'btn-primary fw-bold' : 'btn-white bg-white text-muted border'}`} onClick={() => { setPrimaryRouting('FACTORY_TO_SS'); setOrderForm({...orderForm, from_id: '', to_id: ''}); setGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: '' }); }}>🏭 Factory ➝ 🏢 Super Stockist</button>
-                          <button type="button" className={`btn ${primaryRouting === 'FACTORY_TO_DB' ? 'btn-primary fw-bold' : 'btn-white bg-white text-muted border'}`} onClick={() => { setPrimaryRouting('FACTORY_TO_DB'); setOrderForm({...orderForm, from_id: '', to_id: ''}); setGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: '' }); }}>🏭 Factory ➝ 🚚 Distributor</button>
-                          <button type="button" className={`btn ${primaryRouting === 'SS_TO_DB' ? 'btn-primary fw-bold' : 'btn-white bg-white text-muted border'}`} onClick={() => { setPrimaryRouting('SS_TO_DB'); setOrderForm({...orderForm, from_id: '', to_id: ''}); setGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: '' }); }}>🏢 Super Stockist ➝ 🚚 Distributor</button>
+                          {/* Admin and ZSM see "Factory -> SS". SS sees "Request from Factory" */}
+                          <button type="button" className={`btn ${primaryRouting === 'FACTORY_TO_SS' ? 'btn-primary fw-bold' : 'btn-white bg-white text-muted border'}`} onClick={() => { setPrimaryRouting('FACTORY_TO_SS'); setOrderForm({...orderForm, from_id: '', to_id: ''}); setGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: '' }); }}>
+                             {isAdmin || user?.role === 'ZSM' ? '🏭 Factory ➝ 🏢 Super Stockist' : '📥 Request Stock from Factory'}
+                          </button>
+
+                          {/* Strictly Admin / ZSM Only */}
+                          {(isAdmin || user?.role === 'ZSM') && (
+                             <button type="button" className={`btn ${primaryRouting === 'FACTORY_TO_DB' ? 'btn-primary fw-bold' : 'btn-white bg-white text-muted border'}`} onClick={() => { setPrimaryRouting('FACTORY_TO_DB'); setOrderForm({...orderForm, from_id: '', to_id: ''}); setGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: '' }); }}>🏭 Factory ➝ 🚚 Distributor</button>
+                          )}
+
+                          {/* Admin, ZSM, and SS can push stock downwards */}
+                          <button type="button" className={`btn ${primaryRouting === 'SS_TO_DB' ? 'btn-primary fw-bold' : 'btn-white bg-white text-muted border'}`} onClick={() => { setPrimaryRouting('SS_TO_DB'); setOrderForm({...orderForm, from_id: isPartner && masterData.ss.length > 0 ? masterData.ss[0].id : '', to_id: ''}); setGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: '' }); }}>
+                              {isAdmin || user?.role === 'ZSM' ? '🏢 Super Stockist ➝ 🚚 Distributor' : '📤 Dispatch to Distributor'}
+                          </button>
                         </div>
                       </div>
                     )}
@@ -813,6 +832,7 @@ export default function OrderHub() {
                             onChange={e => {
                               setOrderForm({...orderForm, from_id: e.target.value, to_id: '', batch_number: ''});
                             }}
+                            disabled={isPartner} /* STOPS PARTNERS FROM CHANGING WHO SENDS THE ORDER */
                           >
                             <option value="" disabled>Select Origin Sender...</option>
                             {activeTab === 'primary' && primaryRouting === 'SS_TO_DB' && masterData.ss.map(p => <option key={p.id} value={p.id}>{p.name || p.firm_name || p.shop_name} (ID: {p.id})</option>)}

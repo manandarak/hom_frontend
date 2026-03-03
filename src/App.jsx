@@ -1,7 +1,6 @@
 import React, { useContext } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthContext } from './context/AuthContext';
-
 import MainLayout from './layouts/MainLayout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
@@ -13,11 +12,25 @@ import UserMatrix from './pages/UserMatrix.jsx';
 import FinanceMaster from './pages/FinanceMaster.jsx';
 import OrderHub from "./pages/OrderHub.jsx";
 
-// Protected Route Wrapper
-const ProtectedRoute = ({ children }) => {
+const ProtectedRoute = ({ children, requiredPermissions = [] }) => {
   const { user, loading } = useContext(AuthContext);
-  if (loading) return <div>Loading Enterprise Core...</div>;
+
+  if (loading) return <div className="d-flex justify-content-center align-items-center vh-100"><div className="spinner-border text-primary"></div></div>;
   if (!user) return <Navigate to="/login" replace />;
+
+  const roleName = typeof user?.role === 'object' ? user?.role?.name : user?.role;
+  const isAdmin = roleName?.toLowerCase() === 'admin';
+  const userPerms = user.permissions || [];
+
+  if (isAdmin) return children;
+
+  if (requiredPermissions.length > 0) {
+    const hasPermission = requiredPermissions.some(perm => userPerms.includes(perm));
+    if (!hasPermission) {
+      return <Navigate to="/" replace />;
+    }
+  }
+
   return children;
 };
 
@@ -25,30 +38,52 @@ function App() {
   return (
     <BrowserRouter>
       <Routes>
-        {/* Public Route */}
         <Route path="/login" element={<Login />} />
 
-        {/* Secure App Routes wrapped in the MainLayout */}
         <Route path="/" element={
           <ProtectedRoute>
             <MainLayout />
           </ProtectedRoute>
         }>
-          {/* Default path (/) loads Dashboard */}
           <Route index element={<Dashboard />} />
 
-          {/* Core Modules */}
-          <Route path="geography" element={<GeographyMaster />} />
-          <Route path="inventory" element={<InventoryMaster />} />
-          <Route path="products" element={<ProductMaster />} />
-          <Route path="partners" element={<PartnerMaster />} />
+          <Route path="geography" element={
+            <ProtectedRoute requiredPermissions={['view_geography']}>
+              <GeographyMaster />
+            </ProtectedRoute>
+          } />
+          <Route path="products" element={
+            <ProtectedRoute requiredPermissions={['view_products']}>
+              <ProductMaster />
+            </ProtectedRoute>
+          } />
+          <Route path="partners" element={
+            <ProtectedRoute requiredPermissions={['view_partners']}>
+              <PartnerMaster />
+            </ProtectedRoute>
+          } />
 
-          {/* Identity, Access & Finance */}
-          <Route path="users" element={<UserMatrix />} />
-          <Route path="finance" element={<FinanceMaster />} />
+          <Route path="users" element={
+            <ProtectedRoute requiredPermissions={['view_users', 'manage_users']}>
+              <UserMatrix />
+            </ProtectedRoute>
+          } />
 
-          {/* Supply Chain Execution */}
-          <Route path="orders" element={<OrderHub />} />
+          <Route path="inventory" element={
+            <ProtectedRoute requiredPermissions={['view_inventory']}>
+              <InventoryMaster />
+            </ProtectedRoute>
+          } />
+          <Route path="finance" element={
+            <ProtectedRoute requiredPermissions={['view_invoices', 'view_ledgers']}>
+              <FinanceMaster />
+            </ProtectedRoute>
+          } />
+          <Route path="orders" element={
+            <ProtectedRoute requiredPermissions={['view_all_orders', 'view_own_orders', 'create_primary_order', 'create_secondary_order']}>
+              <OrderHub />
+            </ProtectedRoute>
+          } />
 
         </Route>
       </Routes>
