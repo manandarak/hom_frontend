@@ -2,6 +2,7 @@ import React, { useState, useEffect, useContext } from 'react';
 import api from '../api';
 import toast, { Toaster } from 'react-hot-toast';
 import { AuthContext } from '../context/AuthContext';
+import * as XLSX from 'xlsx';
 
 const initialUserForm = {
   username: '',
@@ -307,6 +308,63 @@ export default function UserMatrix() {
     }
   };
 
+  // --- DYNAMIC EXCEL EXPORT ---
+  const handleExportExcel = () => {
+    const toastId = toast.loading('Generating Excel File...');
+    try {
+      if (activeTab === 'users') {
+        const exportData = filteredUsers.map(u => {
+          const role = roles.find(r => r.id === u.role_id);
+          return {
+            'Username': u.username,
+            'Email': u.email || 'N/A',
+            'Phone Number': u.phone_number || 'N/A',
+            'Role': role ? role.name.toUpperCase() : `ID: ${u.role_id}`,
+            'Account Status': u.is_active ? 'Active' : 'Suspended',
+            'Zone ID': u.assigned_zone_id || 'Global',
+            'State ID': u.assigned_state_id || 'Global',
+            'Region ID': u.assigned_region_id || 'Global',
+            'Area ID': u.assigned_area_id || 'Global',
+            'Territory ID': u.assigned_territory_id || 'Global'
+          };
+        });
+
+        const worksheet = XLSX.utils.json_to_sheet(exportData);
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, "Active_Directory");
+        XLSX.writeFile(workbook, "HoM_Active_Directory.xlsx");
+
+      } else if (activeTab === 'matrix') {
+        const exportData = [];
+
+        Object.entries(groupedPermissions).forEach(([category, { perms }]) => {
+          // Add Category Header Row
+          exportData.push({ 'System Capability': `--- ${category.toUpperCase()} ---` });
+
+          // Map Permissions to Roles
+          perms.forEach(perm => {
+            const row = { 'System Capability': formatPermissionName(perm.name) };
+            roles.forEach(role => {
+              const hasPermission = matrixState[role.id]?.includes(perm.id) || false;
+              const isGodRole = role.name.toLowerCase() === 'admin';
+              row[role.name.toUpperCase()] = isGodRole || hasPermission ? 'YES' : 'NO';
+            });
+            exportData.push(row);
+          });
+        });
+
+        const worksheet = XLSX.utils.json_to_sheet(exportData);
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, "Permission_Matrix");
+        XLSX.writeFile(workbook, "HoM_Permission_Matrix.xlsx");
+      }
+      toast.success('Excel downloaded successfully!', { id: toastId });
+    } catch (error) {
+      console.error("Excel Export Error:", error);
+      toast.error('Failed to generate Excel file.', { id: toastId });
+    }
+  };
+
   const filteredUsers = users.filter(u =>
     (u.username && u.username.toLowerCase().includes(searchQuery.toLowerCase())) ||
     (u.email && u.email.toLowerCase().includes(searchQuery.toLowerCase())) ||
@@ -327,6 +385,11 @@ export default function UserMatrix() {
           <p className="text-muted m-0 mt-1">Manage user accounts, security roles, and system permissions.</p>
         </div>
         <div className="d-flex gap-2">
+          {/* EXCEL EXPORT BUTTON */}
+          <button className="btn btn-outline-success shadow-sm rounded-pill px-4 fw-semibold border-2" onClick={handleExportExcel}>
+            <i className="fa-solid fa-file-excel me-2"></i> Export Excel
+          </button>
+
           {/* SECURED PROVISION BUTTONS */}
           {activeTab === 'users' && canManageUsers && (
             <button className="btn btn-primary shadow-sm rounded-pill px-4 fw-semibold" onClick={() => openUserModal()}>
@@ -732,7 +795,6 @@ export default function UserMatrix() {
           </div>
         </div>
       )}
-
 
       <style>{`
         @keyframes pulse {

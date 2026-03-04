@@ -12,7 +12,7 @@ export default function GeographyMaster() {
   const isAdmin = roleName?.toLowerCase() === 'admin' || (user?.permissions || []).includes('manage_roles');
   const userPerms = user?.permissions || [];
 
-  // Drives database modification rights (Creating nodes, Deleting Zones)
+  // Drives database modification rights (Creating nodes, Deleting nodes)
   const canManageGeography = isAdmin || userPerms.includes('manage_geography');
 
   // --- HIERARCHICAL DATA STORE ---
@@ -31,14 +31,15 @@ export default function GeographyMaster() {
   const [activeNode, setActiveNode] = useState({ level: 'root', id: null, name: 'Global Network' });
   const [newItemName, setNewItemName] = useState('');
 
-  // --- CONFIGURATION ---
+  // --- DYNAMIC API CONFIGURATION ---
+  // Added `apiEndpoint` so the frontend knows exactly which route to hit for edits/deletes
   const config = {
-    root:      { title: 'Global Map', childLevel: 'zone',      childApi: 'zones',       childIdField: null,        icon: 'fa-globe',           color: 'dark' },
-    zone:      { title: 'Zone',       childLevel: 'state',     childApi: 'states',      childIdField: 'zone_id',   icon: 'fa-earth-americas',  color: 'primary' },
-    state:     { title: 'State',      childLevel: 'region',    childApi: 'regions',     childIdField: 'state_id',  icon: 'fa-map',             color: 'success' },
-    region:    { title: 'Region',     childLevel: 'area',      childApi: 'areas',       childIdField: 'region_id', icon: 'fa-map-location-dot',color: 'warning' },
-    area:      { title: 'Area',       childLevel: 'territory', childApi: 'territories', childIdField: 'area_id',   icon: 'fa-street-view',     color: 'info' },
-    territory: { title: 'Territory',  childLevel: null,        childApi: null,          childIdField: null,        icon: 'fa-location-crosshairs', color: 'danger' }
+    root:      { title: 'Global Map', childLevel: 'zone',      childApi: 'zones',       apiEndpoint: null,          childIdField: null,        icon: 'fa-globe',               color: 'dark' },
+    zone:      { title: 'Zone',       childLevel: 'state',     childApi: 'states',      apiEndpoint: 'zones',       childIdField: 'zone_id',   icon: 'fa-earth-americas',      color: 'primary' },
+    state:     { title: 'State',      childLevel: 'region',    childApi: 'regions',     apiEndpoint: 'states',      childIdField: 'state_id',  icon: 'fa-map',                 color: 'success' },
+    region:    { title: 'Region',     childLevel: 'area',      childApi: 'areas',       apiEndpoint: 'regions',     childIdField: 'region_id', icon: 'fa-map-location-dot',    color: 'warning' },
+    area:      { title: 'Area',       childLevel: 'territory', childApi: 'territories', apiEndpoint: 'areas',       childIdField: 'area_id',   icon: 'fa-street-view',         color: 'info' },
+    territory: { title: 'Territory',  childLevel: null,        childApi: null,          apiEndpoint: 'territories', childIdField: null,        icon: 'fa-location-crosshairs', color: 'danger' }
   };
 
   // --- 1. INITIAL LOAD ---
@@ -50,10 +51,7 @@ export default function GeographyMaster() {
     setLoading(true);
     try {
       const res = await api.get('/geo/zones');
-
-      // SAFELY UNPACK ARRAY: Handles standard [] arrays or wrapped { items: [] }
       const fetchedZones = Array.isArray(res.data) ? res.data : res.data?.items || [];
-
       setDataStore(prev => ({ ...prev, root: fetchedZones }));
     } catch (err) {
       toast.error('Failed to connect to Geography API.');
@@ -71,8 +69,6 @@ export default function GeographyMaster() {
     try {
       const parentApiEntity = config[level].childApi === 'states' ? 'zones' : level + 's';
       const res = await api.get(`/geo/${parentApiEntity}/${id}/${childConfig.childApi}`);
-
-      // SAFELY UNPACK ARRAY
       const fetchedChildren = Array.isArray(res.data) ? res.data : res.data?.items || [];
 
       setDataStore(prev => ({
@@ -114,26 +110,18 @@ export default function GeographyMaster() {
     if (!newItemName.trim()) return;
 
     const currConfig = config[activeNode.level];
-    const childLevel = currConfig.childLevel;
-    const childConfig = config[childLevel];
-
+    const childConfig = config[currConfig.childLevel];
     const toastId = toast.loading(`Creating ${childConfig.title}...`);
 
     try {
       const payload = { name: newItemName };
-
-      // Set the proper parent foreign key ID
       if (currConfig.childIdField) {
         payload[currConfig.childIdField] = activeNode.id;
       }
 
-      // Hit proper endpoint
       const res = await api.post(`/geo/${currConfig.childApi}`, payload);
-
-      // Safely extract the new object whether it's wrapped in an object or plain
       const newItem = res.data?.item || res.data;
 
-      // Instantly update the data store to reflect in UI
       if (activeNode.level === 'root') {
         setDataStore(prev => ({ ...prev, root: [...prev.root, newItem] }));
       } else {
@@ -153,19 +141,43 @@ export default function GeographyMaster() {
     }
   };
 
-  const handleDeleteZone = async () => {
-    if (activeNode.level !== 'zone') return;
-    if (!window.confirm(`CRITICAL: Are you sure you want to delete the "${activeNode.name}" Zone? This may orphan linked downstream data.`)) return;
+  // DYNAMIC DELETE: Replaces the hardcoded Zone deletion
+  const handleDeleteNode = async () => {
+    if (activeNode.level === 'root') return;
+    const nodeCfg = config[activeNode.level];
 
-    const toastId = toast.loading(`Deleting ${activeNode.name}...`);
+    if (!window.confirm(`CRITICAL: Are you sure you want to delete the "${activeNode.name}" ${nodeCfg.title}? This may orphan linked downstream nodes and break the routing logic.`)) return;
+
+    const toastId = toast.loading(`Executing deletion of ${activeNode.name}...`);
     try {
-      await api.delete(`/geo/zones/${activeNode.id}`);
+      await api.delete(`/geo/${nodeCfg.apiEndpoint}/${activeNode.id}`);
 
-      setDataStore(prev => ({ ...prev, root: prev.root.filter(z => z.id !== activeNode.id) }));
+      // Instantly wipe the node from React state without a full reload
+      if (activeNode.level === 'zone') {
+        setDataStore(prev => ({ ...prev, root: prev.root.filter(z => z.id !== activeNode.id) }));
+      } else {
+        setDataStore(prev => {
+          // Identify the parent level dictionary
+          const parentLevel = Object.keys(config).find(key => config[key].childLevel === activeNode.level);
+          const newState = { ...prev };
+
+          if (parentLevel && newState[parentLevel]) {
+            // Iterate through the parent dictionaries and strip out the deleted ID
+            Object.keys(newState[parentLevel]).forEach(parentId => {
+              if (newState[parentLevel][parentId]) {
+                newState[parentLevel][parentId] = newState[parentLevel][parentId].filter(n => n.id !== activeNode.id);
+              }
+            });
+          }
+          return newState;
+        });
+      }
+
+      // Reset view to Global Network
       setActiveNode({ level: 'root', id: null, name: 'Global Network' });
-      toast.success('Zone permanently deleted.', { id: toastId });
+      toast.success(`${nodeCfg.title} permanently deleted.`, { id: toastId });
     } catch (err) {
-      toast.error(`Failed to delete: ${err.response?.data?.detail || err.message}`, { id: toastId });
+      toast.error(`Deletion failed: ${err.response?.data?.detail || err.response?.statusText || err.message}`, { id: toastId });
     }
   };
 
@@ -194,21 +206,15 @@ export default function GeographyMaster() {
           style={{ paddingLeft: `${depth * 20 + 15}px !important`, transition: 'all 0.1s ease', cursor: 'pointer' }}
           onClick={() => selectNode(level, item.id, item.name)}
         >
-          {/* Chevron for Expanding */}
           <div style={{ width: '24px' }} className="text-center me-1" onClick={(e) => hasChildren && toggleExpand(e, level, item.id)}>
             {hasChildren ? (
               <i className={`fa-solid fa-chevron-${isExpanded ? 'down' : 'right'} small text-muted hover-text-dark`} style={{ cursor: 'pointer' }}></i>
             ) : <span style={{ width: '14px', display: 'inline-block' }}></span>}
           </div>
-
-          {/* Node Icon */}
           <i className={`fa-solid ${nodeConfig.icon} text-${nodeConfig.color} me-2 opacity-75`}></i>
-
-          {/* Node Name */}
           <span className={`text-truncate text-dark ${isSelected ? 'text-primary' : ''}`} style={{ fontSize: '0.9rem' }}>{item.name}</span>
         </div>
 
-        {/* Render Children if Expanded */}
         {isExpanded && hasChildren && dataStore[level][item.id] && (
           <div className="tree-children">
             {dataStore[level][item.id].map(child => (
@@ -224,8 +230,8 @@ export default function GeographyMaster() {
   };
 
   return (
-    <div className="container-fluid p-4 d-flex flex-column" style={{ height: '100vh', overflow: 'hidden' }}>
-      <Toaster position="top-right" toastOptions={{ style: { borderRadius: '10px', background: '#333', color: '#fff' } }} />
+    <div className="container-fluid p-4 d-flex flex-column" style={{ height: '100vh', overflow: 'hidden', backgroundColor: '#f4f7f8' }}>
+      <Toaster position="top-right" toastOptions={{ style: { borderRadius: '10px', background: '#0f172a', color: '#fff', fontWeight: 'bold' } }} />
 
       {/* HEADER */}
       <div className="d-flex justify-content-between align-items-center mb-4 flex-shrink-0">
@@ -288,10 +294,10 @@ export default function GeographyMaster() {
                 </h4>
               </div>
 
-              {/* SECURED: ONLY SHOW DELETE IF IT IS A ZONE AND USER HAS PERMISSION */}
-              {activeNode.level === 'zone' && canManageGeography && (
-                <button className="btn btn-outline-danger bg-white shadow-sm rounded-pill px-4 fw-bold" onClick={handleDeleteZone}>
-                  <i className="fa-regular fa-trash-can me-2"></i> Delete Zone
+              {/* SECURED: DYNAMIC DELETE FOR ALL NODES (Except Root) */}
+              {activeNode.level !== 'root' && canManageGeography && (
+                <button className="btn btn-outline-danger bg-white shadow-sm rounded-pill px-4 fw-bold" onClick={handleDeleteNode}>
+                  <i className="fa-regular fa-trash-can me-2"></i> Delete {activeCfg.title}
                 </button>
               )}
             </div>

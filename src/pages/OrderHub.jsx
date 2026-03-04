@@ -6,39 +6,36 @@ import { AuthContext } from '../context/AuthContext';
 export default function OrderHub() {
   const { user } = useContext(AuthContext);
 
-  // --- BULLETPROOF RBAC EVALUATION ---
+
   const roleName = typeof user?.role === 'object' ? user?.role?.name : user?.role;
-  const userPerms = user?.permissions || [];
+  const userPerms = user?.role?.permissions?.map(p => p.name) || user?.permissions || [];
 
   const isAdmin = roleName?.toLowerCase() === 'admin' || userPerms.includes('manage_roles');
 
-  // Helps with UI mapping for Pre-Fills and Dropdowns (who sends what)
   const isPartner = ['SuperStockist', 'Distributor', 'Retailer'].includes(roleName);
+  const isInternalTeam = isAdmin || ['ZSM', 'RSM', 'ASM', 'SO'].includes(roleName);
 
-  // --- DYNAMIC PERMISSION ARRAYS ---
-  // Viewing: Instead of string arrays, we check if they have the specific view permission
-  const canViewPrimary = isAdmin || userPerms.includes('view_all_orders') || userPerms.includes('view_own_orders');
-  const canViewSecondary = isAdmin || userPerms.includes('view_all_orders') || userPerms.includes('view_own_orders');
-  const canViewTertiary = isAdmin || userPerms.includes('view_all_orders') || userPerms.includes('view_own_orders');
+  const canViewPrimary = isAdmin || ['SuperStockist', 'Distributor', 'ZSM', 'RSM', 'ASM', 'SO'].includes(roleName);
+  const canViewSecondary = isAdmin || ['Distributor', 'Retailer', 'ZSM', 'RSM', 'ASM', 'SO'].includes(roleName);
+  const canViewTertiary = isAdmin || ['Retailer', 'ZSM', 'RSM', 'ASM', 'SO'].includes(roleName);
+  const canViewConsumers = isAdmin || ['Retailer', 'ZSM', 'RSM', 'ASM', 'SO'].includes(roleName);
 
-  // Placing Orders: Strictly locked to database permissions
   const canPlacePrimary = isAdmin || userPerms.includes('create_primary_order');
   const canPlaceSecondary = isAdmin || userPerms.includes('create_secondary_order');
   const canPlaceTertiary = isAdmin || userPerms.includes('create_tertiary_order');
-
   const canManageConsumers = isAdmin || userPerms.includes('manage_partners');
 
-  // Workflow Engines
   const canDispatchOrder = isAdmin || userPerms.includes('dispatch_order');
   const canReceiveOrder = isAdmin || userPerms.includes('receive_order');
   const canApproveOrder = isAdmin || userPerms.includes('approve_order');
   const canCancelOrder = isAdmin || userPerms.includes('cancel_order');
 
-  // Intelligent Default Tab
   const defaultTab = roleName === 'Retailer' ? 'tertiary' : roleName === 'Distributor' ? 'secondary' : 'primary';
   const [activeTab, setActiveTab] = useState(defaultTab);
   const [loading, setLoading] = useState(false);
   const [openDropdownId, setOpenDropdownId] = useState(null);
+
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const canPlaceOrderInCurrentTab =
     (activeTab === 'primary' && canPlacePrimary) ||
@@ -54,6 +51,7 @@ export default function OrderHub() {
   const [masterData, setMasterData] = useState({ products: [], ss: [], distributors: [], retailers: [], consumers: [] });
   const [geoMaster, setGeoMaster] = useState({ zones: [], states: [], regions: [], areas: [], territories: [] });
   const [geoFilter, setGeoFilter] = useState({ zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: '' });
+
   const [consumerGeoMaster, setConsumerGeoMaster] = useState({ states: [], regions: [], areas: [], territories: [] });
   const [consumerGeoFilter, setConsumerGeoFilter] = useState({ zone_id: '', state_id: '', region_id: '', area_id: '' });
 
@@ -66,7 +64,6 @@ export default function OrderHub() {
   const [isShipmentModalOpen, setIsShipmentModalOpen] = useState(false);
 
   const [approveConfirmId, setApproveConfirmId] = useState(null);
-
   const [shipmentDetails, setShipmentDetails] = useState(null);
   const [editingConsumerId, setEditingConsumerId] = useState(null);
   const [dispatchingOrderId, setDispatchingOrderId] = useState(null);
@@ -78,18 +75,15 @@ export default function OrderHub() {
   const [primaryRouting, setPrimaryRouting] = useState('FACTORY_TO_SS');
   const [availableBatches, setAvailableBatches] = useState([]);
 
-  // --- ERROR DECODER HELPER ---
   const formatError = (err) => {
     let errorMsg = err.response?.data?.detail || err.message;
-    if (Array.isArray(errorMsg)) {
-      return errorMsg.map(d => `${d.loc[d.loc.length - 1]}: ${d.msg}`).join(' | ');
-    } else if (typeof errorMsg === 'object') {
-      return JSON.stringify(errorMsg);
-    }
+    if (Array.isArray(errorMsg)) return errorMsg.map(d => `${d.loc[d.loc.length - 1]}: ${d.msg}`).join(' | ');
+    if (typeof errorMsg === 'object') return JSON.stringify(errorMsg);
     return errorMsg;
   };
 
   useEffect(() => {
+    let isMounted = true;
     const fetchMasterData = async () => {
       try {
         const [prod, ss, dist, ret, cons, zn] = await Promise.all([
@@ -101,18 +95,20 @@ export default function OrderHub() {
           api.get('/geo/zones').catch(() => ({ data: [] }))
         ]);
 
-        setMasterData({
-          products: Array.isArray(prod.data) ? prod.data : prod.data?.items || [],
-          ss: Array.isArray(ss.data) ? ss.data : ss.data?.items || [],
-          distributors: Array.isArray(dist.data) ? dist.data : dist.data?.items || [],
-          retailers: Array.isArray(ret.data) ? ret.data : ret.data?.items || [],
-          consumers: Array.isArray(cons.data) ? cons.data : cons.data?.items || []
-        });
-
-        setGeoMaster(prev => ({ ...prev, zones: Array.isArray(zn.data) ? zn.data : zn.data?.items || [] }));
-      } catch (err) { console.error("Hydration error", err); }
+        if (isMounted) {
+            setMasterData({
+              products: Array.isArray(prod.data) ? prod.data : prod.data?.items || [],
+              ss: Array.isArray(ss.data) ? ss.data : ss.data?.items || [],
+              distributors: Array.isArray(dist.data) ? dist.data : dist.data?.items || [],
+              retailers: Array.isArray(ret.data) ? ret.data : ret.data?.items || [],
+              consumers: Array.isArray(cons.data) ? cons.data : cons.data?.items || []
+            });
+            setGeoMaster(prev => ({ ...prev, zones: Array.isArray(zn.data) ? zn.data : zn.data?.items || [] }));
+        }
+      } catch (err) { if (isMounted) console.error("Hydration error", err); }
     };
     fetchMasterData();
+    return () => { isMounted = false; };
   }, []);
 
   const fetchData = async () => {
@@ -165,7 +161,6 @@ export default function OrderHub() {
 
   const handleGeoChange = async (field, value) => {
     setOrderForm(prev => ({ ...prev, to_id: '' }));
-
     if (field === 'zone_id') {
       setGeoFilter({ zone_id: value, state_id: '', region_id: '', area_id: '', territory_id: '' });
       setGeoMaster(prev => ({ ...prev, states: [], regions: [], areas: [], territories: [] }));
@@ -244,29 +239,26 @@ export default function OrderHub() {
 
   const getFilteredDestinations = () => {
     const targetTier = getTargetTier();
-    if (!orderForm.from_id && !(activeTab === 'primary' && primaryRouting.startsWith('FACTORY'))) return [];
 
-    if (targetTier === 'ss') {
-        let list = masterData.ss;
-        if (geoFilter.zone_id) list = list.filter(s => s.zone_id === parseInt(geoFilter.zone_id));
-        return list;
+    // If internal team hasn't selected a sender yet, return empty
+    if (isInternalTeam && !orderForm.from_id && !(activeTab === 'primary' && primaryRouting.startsWith('FACTORY'))) return [];
+
+    let list = [];
+    if (targetTier === 'ss') list = masterData.ss;
+    else if (targetTier === 'distributor') list = masterData.distributors;
+    else if (targetTier === 'retailer') list = masterData.retailers;
+    else if (targetTier === 'consumer') list = masterData.consumers;
+
+    // Apply internal team geo-filters if they are interacting
+    if (isInternalTeam) {
+        if (geoFilter.territory_id) return list.filter(x => x.territory_id == geoFilter.territory_id);
+        if (geoFilter.area_id) return list.filter(x => x.area_id == geoFilter.area_id);
+        if (geoFilter.region_id) return list.filter(x => x.region_id == geoFilter.region_id);
+        if (geoFilter.state_id) return list.filter(x => x.state_id == geoFilter.state_id);
+        if (geoFilter.zone_id) return list.filter(x => x.zone_id == geoFilter.zone_id);
     }
-    else if (targetTier === 'distributor') {
-        let list = masterData.distributors;
-        if (geoFilter.state_id) list = list.filter(d => d.state_id === parseInt(geoFilter.state_id));
-        return list;
-    }
-    else if (targetTier === 'retailer') {
-        let list = masterData.retailers;
-        if (geoFilter.territory_id) list = list.filter(r => r.territory_id === parseInt(geoFilter.territory_id));
-        return list;
-    }
-    else if (targetTier === 'consumer') {
-        let list = masterData.consumers;
-        if (geoFilter.territory_id) list = list.filter(c => parseInt(c.territory_id) === parseInt(geoFilter.territory_id));
-        return list;
-    }
-    return [];
+
+    return list;
   };
 
   const filteredDestinations = getFilteredDestinations();
@@ -278,19 +270,16 @@ export default function OrderHub() {
 
   const getPartnerName = (tier, id) => {
     if (!id) return '-';
-    let list = [];
-    if (tier === 'ss') list = masterData.ss;
-    if (tier === 'distributor') list = masterData.distributors;
-    if (tier === 'retailer') list = masterData.retailers;
-    if (tier === 'consumer') list = masterData.consumers;
-
+    let list = tier === 'ss' ? masterData.ss : tier === 'distributor' ? masterData.distributors : tier === 'retailer' ? masterData.retailers : masterData.consumers;
     const p = list.find(x => x.id === parseInt(id));
-    if (!p) return `ID: ${id}`;
-    return p.name || p.firm_name || p.shop_name;
+    return p ? (p.name || p.firm_name || p.shop_name) : `ID: ${id}`;
   };
 
+  // --- FORM HANDLERS ---
   const handleConsumerSubmit = async (e) => {
     e.preventDefault();
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     const toastId = toast.loading(editingConsumerId ? 'Updating consumer...' : 'Registering consumer...');
     try {
       const payload = { name: consumerForm.name, mobile_number: consumerForm.phone, address: consumerForm.address, territory_id: parseInt(consumerForm.territory_id), type: "Consumer" };
@@ -302,10 +291,9 @@ export default function OrderHub() {
         toast.success('Consumer registered successfully', { id: toastId });
       }
       setIsConsumerModalOpen(false);
-      setConsumerForm({ name: '', phone: '', address: '', territory_id: '' });
-      setConsumerGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '' });
       fetchData();
     } catch (err) { toast.error(`Error: ${formatError(err)}`, { id: toastId }); }
+    finally { setIsSubmitting(false); }
   };
 
   const handleDeleteConsumer = async (id, name) => {
@@ -320,6 +308,8 @@ export default function OrderHub() {
 
   const handleOrderSubmit = async (e) => {
     e.preventDefault();
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     const toastId = toast.loading(`Routing ${activeTab} order...`);
 
     const generatedOrderNumber = `ORD-${Date.now().toString().slice(-6)}`;
@@ -350,7 +340,7 @@ export default function OrderHub() {
       payload = {
         end_consumer_id: parseInt(orderForm.to_id),
         fulfilled_by_retailer_id: parseInt(orderForm.from_id),
-        assigned_so_id: 1, // Optional: You can make this dynamic if needed
+        assigned_so_id: 1,
         product_id: parseInt(orderForm.product_id),
         quantity: parseInt(orderForm.quantity),
         batch_number: orderForm.batch_number
@@ -361,59 +351,87 @@ export default function OrderHub() {
       await api.post(endpoint, payload);
       toast.success('Order placed successfully!', { id: toastId });
       setIsOrderModalOpen(false);
-      setOrderForm({ from_id: '', to_id: '', product_id: '', quantity: '', batch_number: '' });
-      setGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: '' });
       fetchData();
-    } catch (err) {
-      toast.error(`Validation Error: ${formatError(err)}`, { id: toastId });
-    }
+    } catch (err) { toast.error(`Validation Error: ${formatError(err)}`, { id: toastId }); }
+    finally { setIsSubmitting(false); }
   };
 
   const handleDispatchSubmit = async (e) => {
     e.preventDefault();
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     const toastId = toast.loading('Dispatching order to logistics...');
 
     try {
       const baseRoute = activeTab === 'primary' ? 'primary-orders' : activeTab === 'secondary' ? 'secondary-sales' : 'tertiary-sales';
-
-      const payload = {
-          ...dispatchForm,
-          transport_name: dispatchForm.transporter_name
-      };
-
+      const payload = { ...dispatchForm, transport_name: dispatchForm.transporter_name };
       if (!payload.driver_phone) delete payload.driver_phone;
 
       await api.post(`/${baseRoute}/${dispatchingOrderId}/dispatch`, payload);
       toast.success('Order dispatched successfully!', { id: toastId });
       setIsDispatchModalOpen(false);
       fetchData();
-    } catch (err) {
-      toast.error(`Dispatch failed: ${formatError(err)}`, { id: toastId });
-    }
+    } catch (err) { toast.error(`Dispatch failed: ${formatError(err)}`, { id: toastId }); }
+    finally { setIsSubmitting(false); }
   };
 
   const handleOrderStatus = async (action, orderId, isConfirmed = false) => {
     setOpenDropdownId(null);
-
     if (action === 'approve' && (activeTab === 'secondary' || activeTab === 'tertiary') && !isConfirmed) {
       setApproveConfirmId(orderId);
       return;
     }
+    if (isSubmitting) return;
+    setIsSubmitting(true);
 
     const toastId = toast.loading(`Processing workflow: ${action}...`);
     try {
       const baseRoute = activeTab === 'primary' ? 'primary-orders' : activeTab === 'secondary' ? 'secondary-sales' : 'tertiary-sales';
-
       if (action === 'cancel') await api.put(`/${baseRoute}/${orderId}/cancel`);
       else if (action === 'receive') await api.post(`/${baseRoute}/${orderId}/receive`);
       else if (action === 'approve') await api.patch(`/${baseRoute}/${orderId}/approve`);
 
       toast.success(`Order ${action} executed!`, { id: toastId });
       fetchData();
-    } catch (err) {
-      toast.error(`Action failed: ${formatError(err)}`, { id: toastId });
-    }
+    } catch (err) { toast.error(`Action failed: ${formatError(err)}`, { id: toastId }); }
+    finally { setIsSubmitting(false); }
   };
+
+  // --- SMART PRE-FILL INJECTOR ---
+  const initializeOrderModal = () => {
+    let prefillFrom = '';
+    let prefillTo = '';
+
+    if (isPartner) {
+        if (roleName === 'SuperStockist' && masterData.ss.length > 0) {
+            if (activeTab === 'primary' && primaryRouting === 'FACTORY_TO_SS') {
+                prefillFrom = '1';
+                prefillTo = masterData.ss[0].id.toString();
+            } else if (activeTab === 'primary' && primaryRouting === 'SS_TO_DB') {
+                prefillFrom = masterData.ss[0].id.toString();
+            }
+        } else if (roleName === 'Distributor' && masterData.distributors.length > 0) {
+            prefillFrom = masterData.distributors[0].id.toString();
+        } else if (roleName === 'Retailer' && masterData.retailers.length > 0) {
+            prefillFrom = masterData.retailers[0].id.toString();
+        }
+    }
+
+    setOrderForm({ from_id: prefillFrom, to_id: prefillTo, product_id: '', quantity: '', batch_number: '' });
+    setGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: '' });
+    setIsOrderModalOpen(true);
+  };
+
+  const initializeConsumerModal = () => {
+    setEditingConsumerId(null);
+    let defaultTerritory = '';
+    if (roleName === 'Retailer' && masterData.retailers.length > 0) {
+        defaultTerritory = masterData.retailers[0].territory_id?.toString() || '';
+    }
+    setConsumerForm({ name: '', phone: '', address: '', territory_id: defaultTerritory });
+    setConsumerGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '' });
+    setIsConsumerModalOpen(true);
+  }
 
   return (
     <div className="container-fluid p-4" style={{ backgroundColor: '#f4f7f8', minHeight: '100vh' }}>
@@ -429,26 +447,11 @@ export default function OrderHub() {
         </div>
         <div>
           {activeTab === 'consumers' && canManageConsumers ? (
-            <button className="btn btn-dark shadow-sm rounded-pill px-4 fw-semibold" onClick={() => {
-              setEditingConsumerId(null);
-              setConsumerForm({name:'', phone:'', address:'', territory_id:''});
-              setConsumerGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '' });
-              setIsConsumerModalOpen(true);
-            }}>
+            <button className="btn btn-dark shadow-sm rounded-pill px-4 fw-semibold" onClick={initializeConsumerModal}>
               <i className="fa-solid fa-user-plus me-2"></i> Register Barber / Consumer
             </button>
           ) : activeTab !== 'consumers' && canPlaceOrderInCurrentTab ? (
-            <button className="btn btn-primary shadow-sm rounded-pill px-4 fw-semibold" onClick={() => {
-              // Pre-fill "from_id" for partners and disable the dropdown later
-              let prefillFromId = '';
-              if (isPartner) {
-                  const partnerList = roleName === 'SuperStockist' ? masterData.ss : roleName === 'Distributor' ? masterData.distributors : masterData.retailers;
-                  if (partnerList.length > 0) prefillFromId = partnerList[0].id.toString();
-              }
-              setOrderForm({ from_id: prefillFromId, to_id: '', product_id: '', quantity: '', batch_number: '' });
-              setGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: '' });
-              setIsOrderModalOpen(true);
-            }}>
+            <button className="btn btn-primary shadow-sm rounded-pill px-4 fw-semibold" onClick={initializeOrderModal}>
               <i className="fa-solid fa-cart-plus me-2"></i> Place {activeTab.charAt(0).toUpperCase() + activeTab.slice(1)} Order
             </button>
           ) : null}
@@ -459,38 +462,32 @@ export default function OrderHub() {
       <div className="card border-0 shadow-sm rounded-4 mb-4 bg-white">
         <div className="card-body p-2 d-flex flex-column flex-md-row justify-content-between align-items-center gap-3">
           <div className="nav nav-pills p-1 bg-light rounded-pill w-100 d-flex text-center shadow-sm border border-light">
-
             {canViewPrimary && (
               <button className={`nav-link rounded-pill flex-grow-1 ${activeTab === 'primary' ? 'active bg-primary shadow text-white fw-bold' : 'text-muted fw-semibold hover-bg-white'}`} onClick={() => setActiveTab('primary')}>
                 <i className="fa-solid fa-industry me-2"></i> Primary <span className="opacity-75 ms-1 fw-normal">(Factory / SS)</span>
               </button>
             )}
-
             {canViewSecondary && (
               <button className={`nav-link rounded-pill flex-grow-1 ${activeTab === 'secondary' ? 'active bg-success shadow text-white fw-bold' : 'text-muted fw-semibold hover-bg-white'}`} onClick={() => setActiveTab('secondary')}>
                 <i className="fa-solid fa-truck-ramp-box me-2"></i> Secondary <span className="opacity-75 ms-1 fw-normal">(DB <i className="fa-solid fa-arrow-right mx-1 small"></i> Retailer)</span>
               </button>
             )}
-
             {canViewTertiary && (
               <button className={`nav-link rounded-pill flex-grow-1 ${activeTab === 'tertiary' ? 'active bg-warning shadow text-dark fw-bold' : 'text-muted fw-semibold hover-bg-white'}`} onClick={() => setActiveTab('tertiary')}>
                 <i className="fa-solid fa-shop me-2"></i> Tertiary <span className="opacity-75 ms-1 fw-normal">(Retailer <i className="fa-solid fa-arrow-right mx-1 small"></i> Barber)</span>
               </button>
             )}
-
-            {canViewTertiary && (
+            {canViewConsumers && (
               <button className={`nav-link rounded-pill flex-grow-1 ${activeTab === 'consumers' ? 'active bg-dark shadow text-white fw-bold' : 'text-muted fw-semibold hover-bg-white'}`} onClick={() => setActiveTab('consumers')}>
                 <i className="fa-solid fa-users me-2"></i> Consumers
               </button>
             )}
-
           </div>
         </div>
       </div>
 
       {/* MAIN DATA GRID */}
       <div className="card border-0 shadow-sm rounded-4 overflow-hidden bg-white">
-
         {/* CONSUMERS VIEW */}
         {activeTab === 'consumers' && (
           <div className="table-responsive">
@@ -580,7 +577,6 @@ export default function OrderHub() {
 
                   const itemInfo = o.items && o.items.length > 0 ? o.items[0] : null;
                   const prodId = itemInfo ? itemInfo.product_id : o.product_id;
-
                   const qty = itemInfo ? (itemInfo.quantity_cases || itemInfo.quantity_units || itemInfo.quantity) : (o.quantity_cases || o.quantity_units || o.quantity);
                   const batch = itemInfo ? itemInfo.batch_number : o.batch_number;
 
@@ -589,7 +585,6 @@ export default function OrderHub() {
                   const isPending = (displayStatus === 'Pending' || displayStatus === 'PENDING');
                   const isApproved = (displayStatus === 'APPROVED' || displayStatus === 'Approved' || displayStatus === 'Approved_by_SO');
 
-                  // --- SECURED WORKFLOW ENGINES VIA PERMISSIONS ---
                   const showApprove = canApproveOrder && isPending && (activeTab === 'secondary' || activeTab === 'tertiary');
                   const showDispatch = canDispatchOrder && ((activeTab === 'primary' && isPending) || (activeTab === 'secondary' && isApproved));
                   const showReceive = canReceiveOrder && isDispatched && (activeTab === 'primary' || activeTab === 'secondary');
@@ -644,84 +639,41 @@ export default function OrderHub() {
                       </span>
                     </td>
                     <td className="text-end px-4">
-
                       {needsAction ? (
                         <div className="dropdown position-relative">
-                          <button
-                            className="btn btn-sm btn-dark rounded-pill shadow-sm px-3 fw-bold dropdown-toggle"
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setOpenDropdownId(openDropdownId === o.id ? null : o.id);
-                            }}
-                          >
+                          <button className="btn btn-sm btn-dark rounded-pill shadow-sm px-3 fw-bold dropdown-toggle" type="button" onClick={(e) => { e.stopPropagation(); setOpenDropdownId(openDropdownId === o.id ? null : o.id); }}>
                             <i className="fa-solid fa-bolt me-1 text-warning"></i> Action
                           </button>
-
-                          <ul
-                            className={`dropdown-menu dropdown-menu-end shadow-lg border-0 rounded-4 mt-1 p-2 ${openDropdownId === o.id ? 'show' : ''}`}
-                            style={{ position: 'absolute', right: 0, top: '100%', zIndex: 1050 }}
-                          >
-                            {/* APPROVE ACTION (SECONDARY OR TERTIARY) */}
+                          <ul className={`dropdown-menu dropdown-menu-end shadow-lg border-0 rounded-4 mt-1 p-2 ${openDropdownId === o.id ? 'show' : ''}`} style={{ position: 'absolute', right: 0, top: '100%', zIndex: 1050 }}>
                             {showApprove &&
                               <li>
                                 <button className="dropdown-item rounded-3 text-primary fw-bold py-2 mb-1" onClick={() => handleOrderStatus('approve', o.id)}>
-                                  <div className="bg-primary bg-opacity-10 d-inline-block p-2 rounded-circle me-2">
-                                    <i className={`fa-solid ${activeTab === 'tertiary' ? 'fa-shield-check' : 'fa-thumbs-up'} text-primary`}></i>
-                                  </div>
+                                  <div className="bg-primary bg-opacity-10 d-inline-block p-2 rounded-circle me-2"><i className={`fa-solid ${activeTab === 'tertiary' ? 'fa-shield-check' : 'fa-thumbs-up'} text-primary`}></i></div>
                                   {activeTab === 'tertiary' ? 'Authenticate & Approve' : 'Approve Order'}
                                 </button>
                               </li>
                             }
-
-                            {/* DISPATCH ACTION */}
                             {showDispatch &&
                               <li>
-                                <button className="dropdown-item rounded-3 text-info fw-bold py-2 mb-1"
-                                  onClick={() => {
-                                    setOpenDropdownId(null);
-                                    setDispatchingOrderId(o.id);
-                                    setDispatchForm({
-                                      transporter_name: '',
-                                      vehicle_number: '',
-                                      lr_number: `LR-${Date.now().toString().slice(-6)}`,
-                                      driver_phone: '',
-                                      estimated_arrival_date: new Date(Date.now() + 86400000 * 3).toISOString().split('T')[0]
-                                    });
-                                    setIsDispatchModalOpen(true);
-                                  }}>
-                                  <div className="bg-info bg-opacity-10 d-inline-block p-2 rounded-circle me-2"><i className="fa-solid fa-truck-fast text-info"></i></div>
-                                  Dispatch Logistics
+                                <button className="dropdown-item rounded-3 text-info fw-bold py-2 mb-1" onClick={() => { setOpenDropdownId(null); setDispatchingOrderId(o.id); setDispatchForm({ transporter_name: '', vehicle_number: '', lr_number: `LR-${Date.now().toString().slice(-6)}`, driver_phone: '', estimated_arrival_date: new Date(Date.now() + 86400000 * 3).toISOString().split('T')[0] }); setIsDispatchModalOpen(true); }}>
+                                  <div className="bg-info bg-opacity-10 d-inline-block p-2 rounded-circle me-2"><i className="fa-solid fa-truck-fast text-info"></i></div> Dispatch Logistics
                                 </button>
                               </li>
                             }
-
-                            {/* VIEW DISPATCH DETAILS (Visible to all who can see the order) */}
                             {isDispatched && o.shipment && (
                               <li>
-                                <button className="dropdown-item rounded-3 text-primary fw-bold py-2 mb-1"
-                                  onClick={() => {
-                                    setOpenDropdownId(null);
-                                    setShipmentDetails(o.shipment);
-                                    setIsShipmentModalOpen(true);
-                                  }}>
-                                  <div className="bg-primary bg-opacity-10 d-inline-block p-2 rounded-circle me-2"><i className="fa-solid fa-eye text-primary"></i></div>
-                                  View Logistics
+                                <button className="dropdown-item rounded-3 text-primary fw-bold py-2 mb-1" onClick={() => { setOpenDropdownId(null); setShipmentDetails(o.shipment); setIsShipmentModalOpen(true); }}>
+                                  <div className="bg-primary bg-opacity-10 d-inline-block p-2 rounded-circle me-2"><i className="fa-solid fa-eye text-primary"></i></div> View Logistics
                                 </button>
                               </li>
                             )}
-
-                            {/* RECEIVE ACTION */}
                             {showReceive &&
                               <li>
                                 <button className="dropdown-item rounded-3 text-success fw-bold py-2 mb-1" onClick={() => handleOrderStatus('receive', o.id)}>
-                                  <div className="bg-success bg-opacity-10 d-inline-block p-2 rounded-circle me-2"><i className="fa-solid fa-box-open text-success"></i></div>
-                                  Mark Received
+                                  <div className="bg-success bg-opacity-10 d-inline-block p-2 rounded-circle me-2"><i className="fa-solid fa-box-open text-success"></i></div> Mark Received
                                 </button>
                               </li>
                             }
-
-                            {/* CANCEL ORDERS */}
                             {showCancel && (
                               <>
                                 <li><hr className="dropdown-divider opacity-10 m-1" /></li>
@@ -743,7 +695,7 @@ export default function OrderHub() {
         )}
       </div>
 
-      {/* --- MODAL: CONFIRM APPROVAL (CUSTOM POP-UP) --- */}
+      {/* --- MODAL: CONFIRM APPROVAL --- */}
       {approveConfirmId && (
         <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(15, 23, 42, 0.7)', backdropFilter: 'blur(5px)', zIndex: 1090 }}>
           <div className="modal-dialog modal-dialog-centered">
@@ -764,12 +716,9 @@ export default function OrderHub() {
                 </p>
               </div>
               <div className="modal-footer border-0 p-4 bg-white">
-                <button type="button" className="btn btn-light fw-semibold px-4 rounded-pill" onClick={() => setApproveConfirmId(null)}>Cancel</button>
-                <button type="button" className="btn btn-danger fw-bold px-5 rounded-pill shadow-sm" onClick={() => {
-                  handleOrderStatus('approve', approveConfirmId, true);
-                  setApproveConfirmId(null);
-                }}>
-                  <i className="fa-solid fa-check-double me-2"></i> Confirm Authentication
+                <button type="button" disabled={isSubmitting} className="btn btn-light fw-semibold px-4 rounded-pill" onClick={() => setApproveConfirmId(null)}>Cancel</button>
+                <button type="button" disabled={isSubmitting} className="btn btn-danger fw-bold px-5 rounded-pill shadow-sm" onClick={() => handleOrderStatus('approve', approveConfirmId, true)}>
+                  {isSubmitting ? 'Authenticating...' : <><i className="fa-solid fa-check-double me-2"></i> Confirm Authentication</>}
                 </button>
               </div>
             </div>
@@ -800,127 +749,162 @@ export default function OrderHub() {
                       <div className="col-12 mb-2">
                         <label className="form-label small fw-bold text-uppercase text-muted mb-2">Primary Route Vector <span className="text-danger">*</span></label>
                         <div className="btn-group w-100 shadow-sm" role="group">
-                          {/* Admin and ZSM see "Factory -> SS". SS sees "Request from Factory" */}
-                          <button type="button" className={`btn ${primaryRouting === 'FACTORY_TO_SS' ? 'btn-primary fw-bold' : 'btn-white bg-white text-muted border'}`} onClick={() => { setPrimaryRouting('FACTORY_TO_SS'); setOrderForm({...orderForm, from_id: '', to_id: ''}); setGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: '' }); }}>
-                             {isAdmin || user?.role === 'ZSM' ? '🏭 Factory ➝ 🏢 Super Stockist' : '📥 Request Stock from Factory'}
+                          <button type="button" className={`btn ${primaryRouting === 'FACTORY_TO_SS' ? 'btn-primary fw-bold' : 'btn-white bg-white text-muted border'}`} onClick={() => {
+                            setPrimaryRouting('FACTORY_TO_SS');
+                            setOrderForm({...orderForm, from_id: '1', to_id: isPartner && masterData.ss.length > 0 ? masterData.ss[0].id.toString() : ''});
+                            setGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: '' });
+                          }}>
+                             {isInternalTeam ? '🏭 Factory ➝ 🏢 Super Stockist' : '📥 Request Stock from Factory'}
                           </button>
 
-                          {/* Strictly Admin / ZSM Only */}
-                          {(isAdmin || user?.role === 'ZSM') && (
-                             <button type="button" className={`btn ${primaryRouting === 'FACTORY_TO_DB' ? 'btn-primary fw-bold' : 'btn-white bg-white text-muted border'}`} onClick={() => { setPrimaryRouting('FACTORY_TO_DB'); setOrderForm({...orderForm, from_id: '', to_id: ''}); setGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: '' }); }}>🏭 Factory ➝ 🚚 Distributor</button>
+                          {isInternalTeam && (
+                             <button type="button" className={`btn ${primaryRouting === 'FACTORY_TO_DB' ? 'btn-primary fw-bold' : 'btn-white bg-white text-muted border'}`} onClick={() => {
+                               setPrimaryRouting('FACTORY_TO_DB');
+                               setOrderForm({...orderForm, from_id: '1', to_id: ''});
+                               setGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: '' });
+                             }}>🏭 Factory ➝ 🚚 Distributor</button>
                           )}
 
-                          {/* Admin, ZSM, and SS can push stock downwards */}
-                          <button type="button" className={`btn ${primaryRouting === 'SS_TO_DB' ? 'btn-primary fw-bold' : 'btn-white bg-white text-muted border'}`} onClick={() => { setPrimaryRouting('SS_TO_DB'); setOrderForm({...orderForm, from_id: isPartner && masterData.ss.length > 0 ? masterData.ss[0].id : '', to_id: ''}); setGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: '' }); }}>
-                              {isAdmin || user?.role === 'ZSM' ? '🏢 Super Stockist ➝ 🚚 Distributor' : '📤 Dispatch to Distributor'}
+                          <button type="button" className={`btn ${primaryRouting === 'SS_TO_DB' ? 'btn-primary fw-bold' : 'btn-white bg-white text-muted border'}`} onClick={() => {
+                            setPrimaryRouting('SS_TO_DB');
+                            setOrderForm({...orderForm, from_id: isPartner && masterData.ss.length > 0 ? masterData.ss[0].id.toString() : '', to_id: ''});
+                            setGeoFilter({ zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: '' });
+                          }}>
+                              {isInternalTeam ? '🏢 Super Stockist ➝ 🚚 Distributor' : '📤 Dispatch to Distributor'}
                           </button>
                         </div>
                       </div>
                     )}
 
-                    <div className="col-12">
-                      <label className="form-label small fw-bold text-uppercase text-muted mb-1">Dispatch Origin <span className="text-danger">*</span></label>
-
-                      {activeTab === 'primary' && primaryRouting.startsWith('FACTORY') ? (
-                        <div className="input-group bg-white rounded-3 shadow-sm border overflow-hidden">
-                          <span className="input-group-text bg-light border-0"><i className="fa-solid fa-industry text-muted"></i></span>
-                          <input type="text" className="form-control py-2 border-0 bg-light text-muted fw-bold" disabled value="Main Factory Plant (ID: 1)" />
-                        </div>
-                      ) : (
-                        <div className="input-group bg-white rounded-3 shadow-sm border overflow-hidden">
-                          <span className="input-group-text bg-white border-0"><i className={`fa-solid ${activeTab === 'secondary' ? 'fa-truck-fast text-success' : 'fa-building text-primary'}`}></i></span>
-                          <select
-                            className="form-select border-0 shadow-none py-2 fw-semibold"
-                            required
-                            value={orderForm.from_id}
-                            onChange={e => {
-                              setOrderForm({...orderForm, from_id: e.target.value, to_id: '', batch_number: ''});
-                            }}
-                            disabled={isPartner} /* STOPS PARTNERS FROM CHANGING WHO SENDS THE ORDER */
-                          >
-                            <option value="" disabled>Select Origin Sender...</option>
-                            {activeTab === 'primary' && primaryRouting === 'SS_TO_DB' && masterData.ss.map(p => <option key={p.id} value={p.id}>{p.name || p.firm_name || p.shop_name} (ID: {p.id})</option>)}
-                            {activeTab === 'secondary' && masterData.distributors.map(p => <option key={p.id} value={p.id}>{p.name || p.firm_name || p.shop_name} (ID: {p.id})</option>)}
-                            {activeTab === 'tertiary' && masterData.retailers.map(p => <option key={p.id} value={p.id}>{p.name || p.firm_name || p.shop_name} (ID: {p.id})</option>)}
-                          </select>
-                        </div>
-                      )}
-                    </div>
-
-                    {(orderForm.from_id || (activeTab === 'primary' && primaryRouting.startsWith('FACTORY'))) && (
-                      <div className="col-12 p-3 bg-white rounded-4 shadow-sm border">
-                        <label className="form-label small fw-bold text-uppercase text-primary mb-2"><i className="fa-solid fa-earth-asia me-2"></i> Find Target by Geography</label>
-                        <div className="row g-2">
-
-                          <div className="col-md-3">
-                            <select className="form-select form-select-sm border bg-light shadow-none fw-semibold" value={geoFilter.zone_id} onChange={e => handleGeoChange('zone_id', e.target.value)}>
-                              <option value="">Select Zone</option>
-                              {geoMaster.zones.map(z => <option key={z.id} value={z.id}>{z.name}</option>)}
-                            </select>
-                          </div>
-
-                          {(getTargetTier() === 'distributor' || getTargetTier() === 'retailer' || getTargetTier() === 'consumer') && (
-                            <div className="col-md-3">
-                              <select className="form-select form-select-sm border bg-light shadow-none fw-semibold" value={geoFilter.state_id} onChange={e => handleGeoChange('state_id', e.target.value)} disabled={!geoFilter.zone_id}>
-                                <option value="">Select State</option>
-                                {geoMaster.states.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    {isInternalTeam ? (
+                      /* ============================================== */
+                      /* INTERNAL TEAM UI: FULL SELECTION CAPABILITIES  */
+                      /* ============================================== */
+                      <>
+                        <div className="col-12">
+                          <label className="form-label small fw-bold text-uppercase text-muted mb-1">Dispatch Origin <span className="text-danger">*</span></label>
+                          {activeTab === 'primary' && primaryRouting.startsWith('FACTORY') ? (
+                            <div className="input-group bg-white rounded-3 shadow-sm border overflow-hidden">
+                              <span className="input-group-text bg-light border-0"><i className="fa-solid fa-industry text-muted"></i></span>
+                              <input type="text" className="form-control py-2 border-0 bg-light text-muted fw-bold" disabled value="Main Factory Plant (ID: 1)" />
+                            </div>
+                          ) : (
+                            <div className="input-group bg-white rounded-3 shadow-sm border overflow-hidden">
+                              <span className="input-group-text bg-white border-0"><i className={`fa-solid ${activeTab === 'secondary' ? 'fa-truck-fast text-success' : 'fa-building text-primary'}`}></i></span>
+                              <select className="form-select border-0 shadow-none py-2 fw-semibold" required value={orderForm.from_id} onChange={e => setOrderForm({...orderForm, from_id: e.target.value, to_id: '', batch_number: ''})}>
+                                <option value="" disabled>Select Origin Sender...</option>
+                                {activeTab === 'primary' && primaryRouting === 'SS_TO_DB' && masterData.ss.map(p => <option key={p.id} value={p.id}>{p.name || p.firm_name} (ID: {p.id})</option>)}
+                                {activeTab === 'secondary' && masterData.distributors.map(p => <option key={p.id} value={p.id}>{p.name || p.firm_name} (ID: {p.id})</option>)}
+                                {activeTab === 'tertiary' && masterData.retailers.map(p => <option key={p.id} value={p.id}>{p.name || p.shop_name} (ID: {p.id})</option>)}
                               </select>
                             </div>
                           )}
+                        </div>
 
-                          {(getTargetTier() === 'retailer' || getTargetTier() === 'consumer') && (
-                            <>
+                        {(orderForm.from_id || (activeTab === 'primary' && primaryRouting.startsWith('FACTORY'))) && (
+                          <div className="col-12 p-3 bg-white rounded-4 shadow-sm border">
+                            <label className="form-label small fw-bold text-uppercase text-primary mb-2"><i className="fa-solid fa-earth-asia me-2"></i> Find Target by Geography</label>
+                            <div className="row g-2">
                               <div className="col-md-3">
-                                <select className="form-select form-select-sm border bg-light shadow-none fw-semibold" value={geoFilter.region_id} onChange={e => handleGeoChange('region_id', e.target.value)} disabled={!geoFilter.state_id}>
-                                  <option value="">Select Region</option>
-                                  {geoMaster.regions.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                                <select className="form-select form-select-sm border bg-light shadow-none fw-semibold" value={geoFilter.zone_id} onChange={e => handleGeoChange('zone_id', e.target.value)}>
+                                  <option value="">Select Zone</option>
+                                  {geoMaster.zones.map(z => <option key={z.id} value={z.id}>{z.name}</option>)}
                                 </select>
                               </div>
-                              <div className="col-md-3">
-                                <select className="form-select form-select-sm border bg-light shadow-none fw-semibold" value={geoFilter.area_id} onChange={e => handleGeoChange('area_id', e.target.value)} disabled={!geoFilter.region_id}>
-                                  <option value="">Select Area</option>
-                                  {geoMaster.areas.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
-                                </select>
-                              </div>
-                              <div className="col-md-3 mt-2">
-                                <select className="form-select form-select-sm border bg-light shadow-none fw-semibold border-primary text-primary" value={geoFilter.territory_id} onChange={e => handleGeoChange('territory_id', e.target.value)} disabled={!geoFilter.area_id}>
-                                  <option value="">Select Target Territory</option>
-                                  {geoMaster.territories.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                                </select>
-                              </div>
-                            </>
+                              {(getTargetTier() === 'distributor' || getTargetTier() === 'retailer' || getTargetTier() === 'consumer') && (
+                                <div className="col-md-3">
+                                  <select className="form-select form-select-sm border bg-light shadow-none fw-semibold" value={geoFilter.state_id} onChange={e => handleGeoChange('state_id', e.target.value)} disabled={!geoFilter.zone_id}>
+                                    <option value="">Select State</option>
+                                    {geoMaster.states.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                                  </select>
+                                </div>
+                              )}
+                              {(getTargetTier() === 'retailer' || getTargetTier() === 'consumer') && (
+                                <>
+                                  <div className="col-md-3">
+                                    <select className="form-select form-select-sm border bg-light shadow-none fw-semibold" value={geoFilter.region_id} onChange={e => handleGeoChange('region_id', e.target.value)} disabled={!geoFilter.state_id}>
+                                      <option value="">Select Region</option>
+                                      {geoMaster.regions.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                                    </select>
+                                  </div>
+                                  <div className="col-md-3">
+                                    <select className="form-select form-select-sm border bg-light shadow-none fw-semibold" value={geoFilter.area_id} onChange={e => handleGeoChange('area_id', e.target.value)} disabled={!geoFilter.region_id}>
+                                      <option value="">Select Area</option>
+                                      {geoMaster.areas.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                                    </select>
+                                  </div>
+                                  <div className="col-md-3 mt-2">
+                                    <select className="form-select form-select-sm border bg-light shadow-none fw-semibold border-primary text-primary" value={geoFilter.territory_id} onChange={e => handleGeoChange('territory_id', e.target.value)} disabled={!geoFilter.area_id}>
+                                      <option value="">Select Target Territory</option>
+                                      {geoMaster.territories.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                    </select>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="col-12 mt-2">
+                          <label className="form-label small fw-bold text-uppercase text-muted mb-1">Delivery Destination <span className="text-danger">*</span></label>
+                          <div className="input-group bg-white rounded-3 shadow-sm border overflow-hidden">
+                             <span className="input-group-text bg-white border-0"><i className={`fa-solid ${activeTab === 'primary' && primaryRouting === 'FACTORY_TO_SS' ? 'fa-building text-primary' : activeTab === 'primary' || activeTab === 'secondary' ? 'fa-truck-fast text-success' : 'fa-user text-warning'}`}></i></span>
+                            <select className="form-select border-0 shadow-none py-2 fw-bold" required value={orderForm.to_id} onChange={e => setOrderForm({...orderForm, to_id: e.target.value})} disabled={!orderForm.from_id && !(activeTab === 'primary' && primaryRouting.startsWith('FACTORY'))}>
+                              <option value="" disabled>Select Target Destination...</option>
+                              {filteredDestinations.map(p => <option key={p.id} value={p.id}>{p.name || p.firm_name || p.shop_name} (ID: {p.id})</option>)}
+                            </select>
+                          </div>
+                          {filteredDestinations.length === 0 && (orderForm.from_id || (activeTab === 'primary' && primaryRouting.startsWith('FACTORY'))) && (
+                            <div className="form-text text-danger mt-1 small" style={{fontSize: '0.75rem'}}><i className="fa-solid fa-triangle-exclamation me-1"></i> No partners found based on current filters.</div>
                           )}
                         </div>
-                      </div>
+                      </>
+                    ) : (
+                      /* ============================================== */
+                      /* PARTNER UI: ZERO FRICTION & AUTO-ROUTED        */
+                      /* ============================================== */
+                      <>
+                        <div className="col-12">
+                           <div className="d-flex align-items-center justify-content-between bg-white p-3 rounded-4 border shadow-sm">
+                              <span className="text-muted fw-bold small text-uppercase"><i className="fa-solid fa-route me-2"></i> Routing Vector</span>
+                              <div className="d-flex align-items-center fw-bold">
+                                 <span className="badge bg-light text-dark border px-3 py-2 rounded-pill fs-6 shadow-sm">
+                                   {activeTab === 'primary' && primaryRouting === 'FACTORY_TO_SS' ? '🏭 Main Factory' : '🏢 My Warehouse'}
+                                 </span>
+                                 <i className="fa-solid fa-arrow-right mx-3 text-muted"></i>
+                                 <span className="badge bg-primary bg-opacity-10 text-primary border border-primary px-3 py-2 rounded-pill fs-6 shadow-sm">
+                                   {activeTab === 'primary' && primaryRouting === 'FACTORY_TO_SS' ? '🏢 My Warehouse' : '🎯 Target Partner'}
+                                 </span>
+                              </div>
+                           </div>
+                        </div>
+
+                        {/* Only ask for Destination if they are sending OUT */}
+                        {!(activeTab === 'primary' && primaryRouting === 'FACTORY_TO_SS') && (
+                          <div className="col-12 mt-2">
+                            <label className="form-label small fw-bold text-uppercase text-muted mb-1">
+                              Select Target {activeTab === 'primary' ? 'Distributor' : activeTab === 'secondary' ? 'Retailer' : 'Consumer'} <span className="text-danger">*</span>
+                            </label>
+                            <div className="input-group bg-white rounded-3 shadow-sm border overflow-hidden">
+                              <span className="input-group-text bg-white border-0"><i className="fa-solid fa-crosshairs text-primary"></i></span>
+                              <select className="form-select border-0 shadow-none py-2 fw-bold" required value={orderForm.to_id} onChange={e => setOrderForm({...orderForm, to_id: e.target.value})}>
+                                <option value="" disabled>Select Target Destination...</option>
+                                {filteredDestinations.map(p => (
+                                  <option key={p.id} value={p.id}>{p.name || p.firm_name || p.shop_name}</option>
+                                ))}
+                              </select>
+                            </div>
+                            {filteredDestinations.length === 0 && (
+                              <div className="form-text text-danger mt-1 small" style={{fontSize: '0.75rem'}}>
+                                <i className="fa-solid fa-triangle-exclamation me-1"></i> No connected partners found to dispatch to.
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </>
                     )}
 
-                    <div className="col-12 mt-2">
-                      <label className="form-label small fw-bold text-uppercase text-muted mb-1">Delivery Destination <span className="text-danger">*</span></label>
-                      <div className="input-group bg-white rounded-3 shadow-sm border overflow-hidden">
-                         <span className="input-group-text bg-white border-0"><i className={`fa-solid ${activeTab === 'primary' && primaryRouting === 'FACTORY_TO_SS' ? 'fa-building text-primary' : activeTab === 'primary' || activeTab === 'secondary' ? 'fa-truck-fast text-success' : 'fa-user text-warning'}`}></i></span>
-                        <select
-                          className="form-select border-0 shadow-none py-2 fw-bold"
-                          required
-                          value={orderForm.to_id}
-                          onChange={e => setOrderForm({...orderForm, to_id: e.target.value})}
-                          disabled={!orderForm.from_id && !(activeTab === 'primary' && primaryRouting.startsWith('FACTORY'))}
-                        >
-
-                          <option value="" disabled>Select Target Destination...</option>
-                          {filteredDestinations.map(p => (
-                            <option key={p.id} value={p.id}>{p.name || p.firm_name || p.shop_name} (ID: {p.id})</option>
-                          ))}
-
-                        </select>
-                      </div>
-
-                      {filteredDestinations.length === 0 && (orderForm.from_id || (activeTab === 'primary' && primaryRouting.startsWith('FACTORY'))) && (
-                        <div className="form-text text-danger mt-1 small" style={{fontSize: '0.75rem'}}>
-                          <i className="fa-solid fa-triangle-exclamation me-1"></i> No partners found in the selected geographical area. Please adjust filters.
-                        </div>
-                      )}
-                    </div>
-
+                    {/* COMMON PAYLOAD DETAILS (Product, Batch, Units) */}
                     <div className="col-md-5">
                       <label className="form-label small fw-bold text-uppercase text-muted mb-1">Target Payload (SKU) <span className="text-danger">*</span></label>
                       <div className="input-group bg-white rounded-3 shadow-sm border overflow-hidden">
@@ -974,8 +958,8 @@ export default function OrderHub() {
 
                 <div className="modal-footer border-0 p-4 bg-white shadow-sm" style={{ zIndex: 10 }}>
                   <button type="button" className="btn btn-light fw-semibold px-4 rounded-pill" onClick={() => setIsOrderModalOpen(false)}>Abort</button>
-                  <button type="submit" className={`btn fw-bold px-5 rounded-pill shadow-sm bg-gradient ${activeTab === 'primary' ? 'btn-primary' : activeTab === 'secondary' ? 'btn-success' : 'btn-warning text-dark'}`}>
-                    <i className="fa-solid fa-satellite-dish me-2"></i> Transmit Order
+                  <button type="submit" disabled={isSubmitting} className={`btn fw-bold px-5 rounded-pill shadow-sm bg-gradient ${activeTab === 'primary' ? 'btn-primary' : activeTab === 'secondary' ? 'btn-success' : 'btn-warning text-dark'}`}>
+                    <i className="fa-solid fa-satellite-dish me-2"></i> {isSubmitting ? 'Transmitting...' : 'Transmit Order'}
                   </button>
                 </div>
               </form>
@@ -984,7 +968,7 @@ export default function OrderHub() {
         </div>
       )}
 
-      {/* --- MODAL: DISPATCH LOGISTICS DETAILS (Input Form) --- */}
+      {/* --- MODAL: DISPATCH LOGISTICS DETAILS --- */}
       {isDispatchModalOpen && (
         <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(15, 23, 42, 0.7)', backdropFilter: 'blur(5px)', zIndex: 1070 }}>
           <div className="modal-dialog modal-dialog-centered">
@@ -1040,8 +1024,8 @@ export default function OrderHub() {
                 </div>
                 <div className="modal-footer border-0 p-4 bg-white">
                   <button type="button" className="btn btn-light fw-semibold px-4 rounded-pill" onClick={() => setIsDispatchModalOpen(false)}>Cancel</button>
-                  <button type="submit" className="btn btn-info fw-bold text-white px-5 rounded-pill shadow-sm bg-gradient">
-                    <i className="fa-solid fa-truck-ramp-box me-2"></i> Confirm Dispatch
+                  <button type="submit" disabled={isSubmitting} className="btn btn-info fw-bold text-white px-5 rounded-pill shadow-sm bg-gradient">
+                    <i className="fa-solid fa-truck-ramp-box me-2"></i> {isSubmitting ? 'Dispatching...' : 'Confirm Dispatch'}
                   </button>
                 </div>
               </form>
@@ -1050,7 +1034,7 @@ export default function OrderHub() {
         </div>
       )}
 
-      {/* --- MODAL: VIEW SHIPMENT DETAILS (Read Only) --- */}
+      {/* --- MODAL: VIEW SHIPMENT DETAILS --- */}
       {isShipmentModalOpen && shipmentDetails && (
         <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(15, 23, 42, 0.7)', backdropFilter: 'blur(5px)', zIndex: 1080 }}>
           <div className="modal-dialog modal-dialog-centered">
@@ -1118,42 +1102,43 @@ export default function OrderHub() {
                 <div className="modal-body p-4 bg-light">
                   <div className="row g-3">
 
-                    {/* CASCADING GEO ALLOCATION FOR CONSUMER */}
-                    <div className="col-12 p-3 bg-white rounded-4 shadow-sm border mb-2">
-                       <label className="form-label small fw-bold text-uppercase text-dark mb-2"><i className="fa-solid fa-map-location-dot me-2"></i> Territory Allocation <span className="text-danger">*</span></label>
-                       <div className="row g-2">
-                          <div className="col-md-3">
-                            <select className="form-select form-select-sm border bg-light shadow-none fw-semibold" value={consumerGeoFilter.zone_id} onChange={e => handleConsumerGeoChange('zone_id', e.target.value)}>
-                              <option value="">Select Zone</option>
-                              {geoMaster.zones.map(z => <option key={z.id} value={z.id}>{z.name}</option>)}
-                            </select>
-                          </div>
-                          <div className="col-md-3">
-                            <select className="form-select form-select-sm border bg-light shadow-none fw-semibold" value={consumerGeoFilter.state_id} onChange={e => handleConsumerGeoChange('state_id', e.target.value)} disabled={!consumerGeoFilter.zone_id}>
-                              <option value="">Select State</option>
-                              {consumerGeoMaster.states.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                            </select>
-                          </div>
-                          <div className="col-md-3">
-                            <select className="form-select form-select-sm border bg-light shadow-none fw-semibold" value={consumerGeoFilter.region_id} onChange={e => handleConsumerGeoChange('region_id', e.target.value)} disabled={!consumerGeoFilter.state_id}>
-                              <option value="">Select Region</option>
-                              {consumerGeoMaster.regions.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
-                            </select>
-                          </div>
-                          <div className="col-md-3">
-                            <select className="form-select form-select-sm border bg-light shadow-none fw-semibold" value={consumerGeoFilter.area_id} onChange={e => handleConsumerGeoChange('area_id', e.target.value)} disabled={!consumerGeoFilter.region_id}>
-                              <option value="">Select Area</option>
-                              {consumerGeoMaster.areas.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
-                            </select>
-                          </div>
-                          <div className="col-md-12 mt-2">
-                            <select className="form-select border shadow-none py-2 fw-bold border-dark" required value={consumerForm.territory_id} onChange={e => setConsumerForm({...consumerForm, territory_id: e.target.value})} disabled={!consumerGeoFilter.area_id}>
-                              <option value="">Select Assigned Territory...</option>
-                              {consumerGeoMaster.territories.map(t => <option key={t.id} value={t.id}>{t.name} (ID: {t.id})</option>)}
-                            </select>
-                          </div>
-                       </div>
-                    </div>
+                    {isInternalTeam && (
+                        <div className="col-12 p-3 bg-white rounded-4 shadow-sm border mb-2">
+                           <label className="form-label small fw-bold text-uppercase text-dark mb-2"><i className="fa-solid fa-map-location-dot me-2"></i> Territory Allocation <span className="text-danger">*</span></label>
+                           <div className="row g-2">
+                              <div className="col-md-3">
+                                <select className="form-select form-select-sm border bg-light shadow-none fw-semibold" value={consumerGeoFilter.zone_id} onChange={e => handleConsumerGeoChange('zone_id', e.target.value)}>
+                                  <option value="">Select Zone</option>
+                                  {geoMaster.zones.map(z => <option key={z.id} value={z.id}>{z.name}</option>)}
+                                </select>
+                              </div>
+                              <div className="col-md-3">
+                                <select className="form-select form-select-sm border bg-light shadow-none fw-semibold" value={consumerGeoFilter.state_id} onChange={e => handleConsumerGeoChange('state_id', e.target.value)} disabled={!consumerGeoFilter.zone_id}>
+                                  <option value="">Select State</option>
+                                  {consumerGeoMaster.states.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                                </select>
+                              </div>
+                              <div className="col-md-3">
+                                <select className="form-select form-select-sm border bg-light shadow-none fw-semibold" value={consumerGeoFilter.region_id} onChange={e => handleConsumerGeoChange('region_id', e.target.value)} disabled={!consumerGeoFilter.state_id}>
+                                  <option value="">Select Region</option>
+                                  {consumerGeoMaster.regions.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                                </select>
+                              </div>
+                              <div className="col-md-3">
+                                <select className="form-select form-select-sm border bg-light shadow-none fw-semibold" value={consumerGeoFilter.area_id} onChange={e => handleConsumerGeoChange('area_id', e.target.value)} disabled={!consumerGeoFilter.region_id}>
+                                  <option value="">Select Area</option>
+                                  {consumerGeoMaster.areas.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                                </select>
+                              </div>
+                              <div className="col-md-12 mt-2">
+                                <select className="form-select border shadow-none py-2 fw-bold border-dark" required value={consumerForm.territory_id} onChange={e => setConsumerForm({...consumerForm, territory_id: e.target.value})} disabled={!consumerGeoFilter.area_id}>
+                                  <option value="">Select Assigned Territory...</option>
+                                  {consumerGeoMaster.territories.map(t => <option key={t.id} value={t.id}>{t.name} (ID: {t.id})</option>)}
+                                </select>
+                              </div>
+                           </div>
+                        </div>
+                    )}
 
                     <div className="col-md-6">
                       <label className="form-label small fw-bold text-uppercase text-muted mb-1">Consumer / Barber Name <span className="text-danger">*</span></label>
@@ -1180,8 +1165,8 @@ export default function OrderHub() {
                 </div>
                 <div className="modal-footer border-0 p-4 bg-white">
                   <button type="button" className="btn btn-light fw-semibold px-4 rounded-pill" onClick={() => setIsConsumerModalOpen(false)}>Cancel</button>
-                  <button type="submit" className="btn btn-dark fw-bold px-5 rounded-pill shadow-sm bg-gradient">
-                    <i className="fa-solid fa-address-card me-2"></i> Commit Registry
+                  <button type="submit" disabled={isSubmitting} className="btn btn-dark fw-bold px-5 rounded-pill shadow-sm bg-gradient">
+                    <i className="fa-solid fa-address-card me-2"></i> {isSubmitting ? 'Committing...' : 'Commit Registry'}
                   </button>
                 </div>
               </form>

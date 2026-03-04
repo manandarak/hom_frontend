@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useContext } from 'react';
+import React, { useState, useEffect, useRef, useContext, useCallback } from 'react';
 import Chart from 'react-apexcharts';
 import { MapContainer, TileLayer, CircleMarker, Popup, Tooltip } from 'react-leaflet';
 import api from '../api';
@@ -13,17 +13,14 @@ export default function Dashboard() {
   const roleName = typeof user?.role === 'object' ? user?.role?.name : user?.role;
   const userPerms = user?.permissions || [];
 
-  // These checks remain because they drive structural UI differences (Admin Map vs Partner Donut)
-  // But they do NOT restrict database execution (which is now handled by userPerms)
   const isAdminOrInternal = ['Admin', 'ZSM', 'RSM', 'ASM', 'SO'].includes(roleName);
   const isPartner = ['SuperStockist', 'Distributor', 'Retailer'].includes(roleName);
-
   const isAdmin = roleName?.toLowerCase() === 'admin' || userPerms.includes('manage_roles');
 
   // --- LIVE DATA STATES ---
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null); // Added proper error state
 
-  // Dynamic Stats Object
   const [stats, setStats] = useState({
     stockVolume: 0,
     pendingAction: 0,
@@ -33,159 +30,153 @@ export default function Dashboard() {
 
   const [terminalLogs, setTerminalLogs] = useState([]);
   const [recentOrders, setRecentOrders] = useState([]);
-
-  // Charts Data
   const [pipelineChartData, setPipelineChartData] = useState([]);
   const [partnerProductChart, setPartnerProductChart] = useState({ labels: [], series: [] });
-
-  // Master Data Translators
   const [masterData, setMasterData] = useState({ products: {}, partners: {} });
 
   // --- DATA HYDRATION ---
-  useEffect(() => {
-    const fetchDashboardData = async () => {
-      try {
-        setLoading(true);
+  const fetchDashboardData = useCallback(async (isSilentRefresh = false) => {
+    try {
+      if (!isSilentRefresh) setLoading(true);
+      setError(null);
 
-        // 1. Fetch all heavily optimized parallel requests (Backend already scopes the Partner/Order lists!)
-        const [
-          primaryRes, secondaryRes, tertiaryRes,
-          prodRes, ssRes, distRes, retRes, consRes,
-          ledgerRes // Only useful for Admins, but we fetch it
-        ] = await Promise.all([
-          api.get('/primary-orders/').catch(() => ({ data: [] })),
-          api.get('/secondary-sales/').catch(() => ({ data: [] })),
-          api.get('/tertiary-sales/').catch(() => ({ data: [] })),
-          api.get('/products').catch(() => ({ data: [] })),
-          api.get('/partners/super-stockists').catch(() => ({ data: [] })),
-          api.get('/partners/distributors').catch(() => ({ data: [] })),
-          api.get('/partners/retailers').catch(() => ({ data: [] })),
-          api.get('/tertiary-sales/consumers').catch(() => ({ data: [] })),
-          isAdminOrInternal ? api.get('/inventory/ledger').catch(() => ({ data: [] })) : Promise.resolve({ data: [] })
-        ]);
+      // 1. Fetch data - REMOVED trailing slashes & REMOVED silent .catch() swallowing
+      const [
+        primaryRes, secondaryRes, tertiaryRes,
+        prodRes, ssRes, distRes, retRes, consRes,
+        ledgerRes
+      ] = await Promise.all([
+        api.get('/primary-orders'),
+        api.get('/secondary-sales'),
+        api.get('/tertiary-sales'),
+        api.get('/products'),
+        api.get('/partners/super-stockists'),
+        api.get('/partners/distributors'),
+        api.get('/partners/retailers'),
+        api.get('/tertiary-sales/consumers'),
+        isAdminOrInternal ? api.get('/inventory/ledger') : Promise.resolve({ data: [] })
+      ]);
 
-        // Normalize Data
-        const pOrders = Array.isArray(primaryRes.data) ? primaryRes.data : primaryRes.data?.items || [];
-        const sOrders = Array.isArray(secondaryRes.data) ? secondaryRes.data : secondaryRes.data?.items || [];
-        const tOrders = Array.isArray(tertiaryRes.data) ? tertiaryRes.data : tertiaryRes.data?.items || [];
-        const ledger = Array.isArray(ledgerRes.data) ? ledgerRes.data : ledgerRes.data?.items || [];
+      // Normalize Data
+      const pOrders = Array.isArray(primaryRes.data) ? primaryRes.data : primaryRes.data?.items || [];
+      const sOrders = Array.isArray(secondaryRes.data) ? secondaryRes.data : secondaryRes.data?.items || [];
+      const tOrders = Array.isArray(tertiaryRes.data) ? tertiaryRes.data : tertiaryRes.data?.items || [];
+      const ledger = Array.isArray(ledgerRes.data) ? ledgerRes.data : ledgerRes.data?.items || [];
 
-        const ss = Array.isArray(ssRes.data) ? ssRes.data : ssRes.data?.items || [];
-        const dist = Array.isArray(distRes.data) ? distRes.data : distRes.data?.items || [];
-        const ret = Array.isArray(retRes.data) ? retRes.data : retRes.data?.items || [];
-        const cons = Array.isArray(consRes.data) ? consRes.data : consRes.data?.items || [];
-        const products = Array.isArray(prodRes.data) ? prodRes.data : prodRes.data?.items || [];
+      const ss = Array.isArray(ssRes.data) ? ssRes.data : ssRes.data?.items || [];
+      const dist = Array.isArray(distRes.data) ? distRes.data : distRes.data?.items || [];
+      const ret = Array.isArray(retRes.data) ? retRes.data : retRes.data?.items || [];
+      const cons = Array.isArray(consRes.data) ? consRes.data : consRes.data?.items || [];
+      const products = Array.isArray(prodRes.data) ? prodRes.data : prodRes.data?.items || [];
 
-        // Build Translation Dictionaries
-        const allPartners = {};
-        [...ss, ...dist, ...ret, ...cons].forEach(p => { allPartners[p.id] = p.name || p.firm_name || p.shop_name });
-        const productDict = {};
-        products.forEach(p => { productDict[p.id] = p.name || p.product_name });
-        setMasterData({ products: productDict, partners: allPartners });
+      // Build Translation Dictionaries (Fallback for N+1 fix)
+      const allPartners = {};
+      [...ss, ...dist, ...ret, ...cons].forEach(p => { allPartners[p.id] = p.name || p.firm_name || p.shop_name });
+      const productDict = {};
+      products.forEach(p => { productDict[p.id] = p.name || p.product_name });
+      setMasterData({ products: productDict, partners: allPartners });
 
-        // --- SPECIFIC LOGIC FOR ADMINS VS PARTNERS ---
-        let calculatedStock = 0;
-        let downStreamNetwork = 0;
-        let inboundCount = 0;
-        let outboundCount = 0;
-        let mergedLogs = [];
+      // --- SPECIFIC LOGIC FOR ADMINS VS PARTNERS ---
+      let calculatedStock = 0;
+      let downStreamNetwork = 0;
+      let inboundCount = 0;
+      let outboundCount = 0;
+      let mergedLogs = [];
 
-        // Identify Partner ID if applicable
-        let myPartnerId = null;
-        if (isPartner) {
-            const myProfile = roleName === 'SuperStockist' ? ss[0] : roleName === 'Distributor' ? dist[0] : ret[0];
-            myPartnerId = myProfile ? myProfile.id : null;
-        }
-
-        if (isAdminOrInternal) {
-            // ADMIN / INTERNAL LOGIC
-            const factoryRes = await api.get('/inventory/factory/1').catch(() => ({ data: [] }));
-            const fStock = Array.isArray(factoryRes.data) ? factoryRes.data : factoryRes.data?.items || [];
-            calculatedStock = fStock.reduce((sum, item) => sum + (item.current_stock_qty || item.current_stock || 0), 0);
-            downStreamNetwork = ss.length + dist.length + ret.length;
-            setPipelineChartData([pOrders.length, sOrders.length, tOrders.length]);
-
-            // Build Admin Terminal
-            mergedLogs = ledger.slice(0, 25).reverse().map(l => {
-                let type = l.transaction_type === 'PRODUCTION' ? 'SUCCESS' : l.transaction_type === 'ADJUSTMENT' ? 'WARN' : 'INFO';
-                const d = l.quantity_change > 0 ? `+${l.quantity_change}` : l.quantity_change;
-                const pName = productDict[l.product_id] || `PRD-${l.product_id}`;
-                return { time: new Date(l.created_at).toLocaleTimeString('en-IN'), type, msg: `[${l.entity_type.toUpperCase()}] ${l.transaction_type}: ${d}x ${pName}. Bal: ${l.closing_balance}` };
-            });
-
-        } else if (isPartner && myPartnerId) {
-            // EXTERNAL PARTNER LOGIC
-            // 1. Fetch their specific stock
-            const tierStr = roleName === 'SuperStockist' ? 'ss' : roleName === 'Distributor' ? 'distributor' : 'retailer';
-            const myStockRes = await api.get(`/inventory/${tierStr}/${myPartnerId}`).catch(() => ({ data: [] }));
-            const myStockItems = Array.isArray(myStockRes.data) ? myStockRes.data : myStockRes.data?.items || [];
-            calculatedStock = myStockItems.reduce((sum, item) => sum + (item.current_stock_qty || item.current_stock || item.quantity || 0), 0);
-
-            // 2. Determine their specific downstream network
-            if (roleName === 'SuperStockist') downStreamNetwork = dist.length;
-            if (roleName === 'Distributor') downStreamNetwork = ret.length;
-            if (roleName === 'Retailer') downStreamNetwork = cons.length;
-
-            // 3. Chart their Inbound vs Outbound
-            if (roleName === 'SuperStockist') { inboundCount = pOrders.filter(o => o.type === 'FACTORY_TO_SS').length; outboundCount = pOrders.filter(o => o.type === 'SS_TO_DB').length; }
-            if (roleName === 'Distributor') { inboundCount = pOrders.filter(o => o.type === 'SS_TO_DB' || o.type === 'FACTORY_TO_DB').length; outboundCount = sOrders.length; }
-            if (roleName === 'Retailer') { inboundCount = sOrders.length; outboundCount = tOrders.length; }
-            setPipelineChartData([inboundCount, outboundCount]);
-
-            // 4. Determine their Top Products for the Donut Chart
-            const productFreq = {};
-            [...pOrders, ...sOrders, ...tOrders].forEach(o => {
-                const pId = o.items?.[0]?.product_id || o.product_id;
-                if (pId) productFreq[pId] = (productFreq[pId] || 0) + 1;
-            });
-            const topProducts = Object.entries(productFreq).sort((a,b) => b[1] - a[1]).slice(0, 4);
-            setPartnerProductChart({
-                labels: topProducts.map(tp => productDict[tp[0]] || `SKU ${tp[0]}`),
-                series: topProducts.map(tp => tp[1])
-            });
-
-            // 5. Build Partner Activity Feed Terminal (derived from orders)
-            let combinedPartnerActivity = [...pOrders, ...sOrders, ...tOrders].sort((a, b) => b.id - a.id).slice(0, 20);
-            mergedLogs = combinedPartnerActivity.reverse().map(o => {
-                const isMyInbound = o.to_entity_id === myPartnerId || o.retailer_id === myPartnerId || o.ss_id === myPartnerId;
-                const type = isMyInbound ? 'SUCCESS' : 'WARN'; // Green for incoming, Orange for outgoing
-                const pName = productDict[o.items?.[0]?.product_id || o.product_id] || 'Stock';
-                const qty = o.items?.[0]?.quantity || o.quantity || 0;
-                const verb = isMyInbound ? 'Receiving' : 'Dispatching';
-                const status = (o.status || 'Pending').toUpperCase();
-                return { time: new Date().toLocaleTimeString('en-IN'), type: status === 'PENDING' ? 'INFO' : type, msg: `[${o.order_number || `ORD-${o.id}`}] ${verb} ${qty}x ${pName} - ${status}` };
-            });
-        }
-
-        // Add boot sequence to terminal
-        setTerminalLogs([
-          { time: new Date().toLocaleTimeString('en-IN'), type: 'SECURE', msg: `Pulse Engine Initialized for ${roleName}...` },
-          { time: new Date().toLocaleTimeString('en-IN'), type: 'INFO', msg: "Encrypted connection established." },
-          ...mergedLogs
-        ]);
-
-        // Combined Stats
-        const allMergedOrders = [...pOrders, ...sOrders, ...tOrders];
-        setStats({
-          stockVolume: calculatedStock,
-          pendingAction: allMergedOrders.filter(o => (o.status || '').toUpperCase() === 'PENDING').length,
-          networkSize: downStreamNetwork,
-          pulseOps: allMergedOrders.length
-        });
-
-        // Combined Recent Table
-        allMergedOrders.sort((a, b) => b.id - a.id);
-        setRecentOrders(allMergedOrders.slice(0, 5));
-
-      } catch (err) {
-        console.error("Dashboard hydration failed", err);
-      } finally {
-        setLoading(false);
+      let myPartnerId = null;
+      if (isPartner) {
+          const myProfile = roleName === 'SuperStockist' ? ss[0] : roleName === 'Distributor' ? dist[0] : ret[0];
+          myPartnerId = myProfile ? myProfile.id : null;
       }
-    };
 
-    fetchDashboardData();
+      if (isAdminOrInternal) {
+          const factoryRes = await api.get('/inventory/factory/1').catch(() => ({ data: [] })); // Factory fallback ok here if none exists yet
+          const fStock = Array.isArray(factoryRes.data) ? factoryRes.data : factoryRes.data?.items || [];
+          calculatedStock = fStock.reduce((sum, item) => sum + (item.current_stock_qty || item.current_stock || 0), 0);
+          downStreamNetwork = ss.length + dist.length + ret.length;
+          setPipelineChartData([pOrders.length, sOrders.length, tOrders.length]);
+
+          mergedLogs = ledger.slice(0, 25).reverse().map(l => {
+              let type = l.transaction_type === 'PRODUCTION' ? 'SUCCESS' : l.transaction_type === 'ADJUSTMENT' ? 'WARN' : 'INFO';
+              const d = l.quantity_change > 0 ? `+${l.quantity_change}` : l.quantity_change;
+              const pName = l.product_name || productDict[l.product_id] || `PRD-${l.product_id}`;
+              return { time: new Date(l.created_at).toLocaleTimeString('en-IN'), type, msg: `[${l.entity_type.toUpperCase()}] ${l.transaction_type}: ${d}x ${pName}. Bal: ${l.closing_balance}` };
+          });
+
+      } else if (isPartner && myPartnerId) {
+          const tierStr = roleName === 'SuperStockist' ? 'ss' : roleName === 'Distributor' ? 'distributor' : 'retailer';
+          const myStockRes = await api.get(`/inventory/${tierStr}/${myPartnerId}`);
+          const myStockItems = Array.isArray(myStockRes.data) ? myStockRes.data : myStockRes.data?.items || [];
+          calculatedStock = myStockItems.reduce((sum, item) => sum + (item.current_stock_qty || item.current_stock || item.quantity || 0), 0);
+
+          if (roleName === 'SuperStockist') downStreamNetwork = dist.length;
+          if (roleName === 'Distributor') downStreamNetwork = ret.length;
+          if (roleName === 'Retailer') downStreamNetwork = cons.length;
+
+          if (roleName === 'SuperStockist') { inboundCount = pOrders.filter(o => o.type === 'FACTORY_TO_SS').length; outboundCount = pOrders.filter(o => o.type === 'SS_TO_DB').length; }
+          if (roleName === 'Distributor') { inboundCount = pOrders.filter(o => o.type === 'SS_TO_DB' || o.type === 'FACTORY_TO_DB').length; outboundCount = sOrders.length; }
+          if (roleName === 'Retailer') { inboundCount = sOrders.length; outboundCount = tOrders.length; }
+          setPipelineChartData([inboundCount, outboundCount]);
+
+          const productFreq = {};
+          [...pOrders, ...sOrders, ...tOrders].forEach(o => {
+              const pId = o.items?.[0]?.product_id || o.product_id;
+              if (pId) productFreq[pId] = (productFreq[pId] || 0) + 1;
+          });
+          const topProducts = Object.entries(productFreq).sort((a,b) => b[1] - a[1]).slice(0, 4);
+          setPartnerProductChart({
+              labels: topProducts.map(tp => productDict[tp[0]] || `SKU ${tp[0]}`),
+              series: topProducts.map(tp => tp[1])
+          });
+
+          let combinedPartnerActivity = [...pOrders, ...sOrders, ...tOrders].sort((a, b) => b.id - a.id).slice(0, 20);
+          mergedLogs = combinedPartnerActivity.reverse().map(o => {
+              const isMyInbound = o.to_entity_id === myPartnerId || o.retailer_id === myPartnerId || o.ss_id === myPartnerId;
+              const type = isMyInbound ? 'SUCCESS' : 'WARN';
+              const pName = o.product_name || productDict[o.items?.[0]?.product_id || o.product_id] || 'Stock';
+              const qty = o.items?.[0]?.quantity || o.quantity || 0;
+              const verb = isMyInbound ? 'Receiving' : 'Dispatching';
+              const status = (o.status || 'Pending').toUpperCase();
+              return { time: new Date().toLocaleTimeString('en-IN'), type: status === 'PENDING' ? 'INFO' : type, msg: `[${o.order_number || `ORD-${o.id}`}] ${verb} ${qty}x ${pName} - ${status}` };
+          });
+      }
+
+      setTerminalLogs(prevLogs => {
+        const initLogs = [
+          { time: new Date().toLocaleTimeString('en-IN'), type: 'SECURE', msg: `Pulse Engine Initialized for ${roleName}...` },
+          { time: new Date().toLocaleTimeString('en-IN'), type: 'INFO', msg: "Encrypted connection established." }
+        ];
+        return isSilentRefresh ? mergedLogs : [...initLogs, ...mergedLogs];
+      });
+
+      const allMergedOrders = [...pOrders, ...sOrders, ...tOrders];
+      setStats({
+        stockVolume: calculatedStock,
+        pendingAction: allMergedOrders.filter(o => (o.status || '').toUpperCase() === 'PENDING').length,
+        networkSize: downStreamNetwork,
+        pulseOps: allMergedOrders.length
+      });
+
+      allMergedOrders.sort((a, b) => b.id - a.id);
+      setRecentOrders(allMergedOrders.slice(0, 5));
+
+    } catch (err) {
+      console.error("Dashboard hydration failed", err);
+      // Hard fail state so the user actually knows the DB or token is dead
+      setError(err.response?.status === 401
+        ? "Session expired. Please log in again."
+        : "Critical failure communicating with backend services.");
+    } finally {
+      setLoading(false);
+    }
   }, [isAdminOrInternal, isPartner, user, roleName]);
+
+  useEffect(() => {
+    fetchDashboardData();
+    // Real-time polling every 60 seconds
+    const interval = setInterval(() => fetchDashboardData(true), 60000);
+    return () => clearInterval(interval);
+  }, [fetchDashboardData]);
 
   // Auto-scroll terminal
   useEffect(() => {
@@ -215,7 +206,6 @@ export default function Dashboard() {
     dataLabels: { enabled: false }
   };
 
-  // --- STATIC MAP CONFIGURATION (Admin Only) ---
   const cities = [
     { name: "Mumbai (HQ/Factory)", coords: [19.0760, 72.8777], volume: 95, color: "#2563eb" },
     { name: "Baddi", coords: [30.9388, 76.7865], volume: 85, color: "#f59e0b" },
@@ -225,14 +215,25 @@ export default function Dashboard() {
   const getLogColor = (type) => {
     switch(type) {
       case 'ERROR': return '#ef4444';
-      case 'WARN': return '#f59e0b'; // Outbound / Adjustment
-      case 'SUCCESS': return '#10b981'; // Inbound / Production
+      case 'WARN': return '#f59e0b';
+      case 'SUCCESS': return '#10b981';
       case 'SECURE': return '#8b5cf6';
       default: return '#3b82f6';
     }
   };
 
   if(loading) return <div className="p-5 text-center text-muted"><div className="spinner-border text-primary mb-3"></div><br/>Booting Enterprise Gateway...</div>;
+
+  if(error) return (
+    <div className="container-fluid p-5 text-center" style={{ backgroundColor: '#f4f7f8', minHeight: '100vh' }}>
+      <div className="alert alert-danger d-inline-block shadow-sm rounded-4 px-4 py-3">
+        <i className="fa-solid fa-triangle-exclamation fs-3 mb-2"></i>
+        <h5 className="fw-bold">System Offline</h5>
+        <p className="mb-0">{error}</p>
+        <button className="btn btn-outline-danger btn-sm mt-3 fw-bold rounded-pill" onClick={() => window.location.reload()}>Reboot Connection</button>
+      </div>
+    </div>
+  );
 
   return (
     <div className="container-fluid p-4" style={{ backgroundColor: '#f4f7f8', minHeight: '100vh' }}>
@@ -321,7 +322,6 @@ export default function Dashboard() {
                   <a href="/partners" className="btn btn-outline-dark text-start fw-bold"><i className="fa-solid fa-user-plus me-2" style={{width: '20px'}}></i> Register Network Partner</a>
                 )}
 
-                {/* Failsafe if they have zero execution permissions */}
                 {!isAdmin && !userPerms.includes('manage_inventory') && !userPerms.includes('dispatch_order') && !userPerms.includes('manage_partners') && !userPerms.includes('create_primary_order') && (
                   <div className="text-center p-3 text-muted small fst-italic">
                     <i className="fa-solid fa-lock mb-2 d-block fs-4 opacity-25"></i>
@@ -351,7 +351,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* 3. DYNAMIC MIDDLE ROW: Admin gets Map. Partner gets Top Products Donut. Both get Terminal. */}
+      {/* 3. DYNAMIC MIDDLE ROW */}
       <div className="row g-4 mb-4">
         <div className="col-lg-6">
           <div className="card border-0 shadow-sm rounded-4 h-100 bg-white overflow-hidden">
@@ -409,7 +409,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* 4. RECENT TRANSACTIONS TABLE (Live Data) */}
+      {/* 4. RECENT TRANSACTIONS TABLE */}
       <div className="row g-4">
         <div className="col-12">
           <div className="card border-0 shadow-sm rounded-4 bg-white overflow-hidden">
@@ -431,21 +431,19 @@ export default function Dashboard() {
                   {recentOrders.length === 0 ? <tr><td colSpan="5" className="text-center py-4 text-muted">No recent operations.</td></tr> :
                    recentOrders.map((o, idx) => {
 
-                     // Determine origin and destination names securely
                      const destId = o.to_entity_id || o.ss_id || o.retailer_id || o.end_consumer_id;
-                     const destName = masterData.partners[destId] || `Node #${destId || '?'}`;
+                     // Updated to prefer backend-provided names over dictionary lookups to avoid N+1
+                     const destName = o.destination_name || masterData.partners[destId] || `Node #${destId || '?'}`;
 
                      let originName = '🏭 Factory';
-                     if (o.type === 'SS_TO_DB' || o.distributor_id) originName = masterData.partners[o.from_entity_id || o.distributor_id] || 'SS / Dist';
-                     if (o.fulfilled_by_retailer_id) originName = masterData.partners[o.fulfilled_by_retailer_id] || 'Retailer';
+                     if (o.type === 'SS_TO_DB' || o.distributor_id) originName = o.origin_name || masterData.partners[o.from_entity_id || o.distributor_id] || 'SS / Dist';
+                     if (o.fulfilled_by_retailer_id) originName = o.origin_name || masterData.partners[o.fulfilled_by_retailer_id] || 'Retailer';
 
-                     // Determine product string
                      const itemInfo = o.items && o.items.length > 0 ? o.items[0] : null;
                      const prodId = itemInfo ? itemInfo.product_id : o.product_id;
                      const qty = itemInfo ? (itemInfo.quantity_cases || itemInfo.quantity_units || itemInfo.quantity) : (o.quantity_cases || o.quantity_units || o.quantity);
-                     const prodName = masterData.products[prodId] || `SKU-${prodId}`;
+                     const prodName = o.product_name || masterData.products[prodId] || `SKU-${prodId}`;
 
-                     // Render pipeline tier mathematically
                      let tierStr = 'Primary';
                      let badgeCol = 'primary';
                      if (o.distributor_id && o.retailer_id) { tierStr = 'Secondary'; badgeCol = 'success'; }
