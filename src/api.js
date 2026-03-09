@@ -3,7 +3,7 @@ import axios from 'axios';
 // 1. Dynamic Base URL for CI/CD Deployment (AWS / Docker)
 // Falls back to localhost ONLY if the environment variable is missing during local dev.
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000/api/v1',
+  baseURL: import.meta.env.VITE_API_URL || 'http://13.232.157.160:8000/api/v1',
 });
 
 // 2. Request Interceptor: Injects the Auth Token into every outgoing request
