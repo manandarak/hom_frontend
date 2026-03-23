@@ -6,7 +6,6 @@ import { AuthContext } from '../context/AuthContext';
 export default function OrderHub() {
   const { user } = useContext(AuthContext);
 
-
   const roleName = typeof user?.role === 'object' ? user?.role?.name : user?.role;
   const userPerms = user?.role?.permissions?.map(p => p.name) || user?.permissions || [];
 
@@ -397,6 +396,54 @@ export default function OrderHub() {
     finally { setIsSubmitting(false); }
   };
 
+  // --- NEW: GENERATE INVOICE HANDLER ---
+  const handleGenerateInvoice = async (orderId) => {
+    setOpenDropdownId(null);
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+
+    const toastId = toast.loading(`Generating invoice for Order ${orderId}...`);
+    try {
+      // Pass responseType: 'blob' to handle the file stream properly
+      const response = await api.post(`/invoices/${orderId}/generate`, {}, {
+        responseType: 'blob',
+      });
+
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+
+      const contentDisposition = response.headers['content-disposition'];
+      let fileName = `Invoice_ORD-${orderId}.pdf`;
+      if (contentDisposition) {
+          const fileNameMatch = contentDisposition.match(/filename="?(.+)"?/);
+          if (fileNameMatch && fileNameMatch.length === 2)
+              fileName = fileNameMatch[1];
+      }
+
+      link.setAttribute('download', fileName);
+      document.body.appendChild(link);
+      link.click();
+
+      link.parentNode.removeChild(link);
+      window.URL.revokeObjectURL(url);
+
+      toast.success('Invoice downloaded successfully!', { id: toastId });
+    } catch (err) {
+      let errorMessage = 'Failed to generate invoice';
+      if (err.response && err.response.data instanceof Blob) {
+         const text = await err.response.data.text();
+         try {
+             const jsonError = JSON.parse(text);
+             errorMessage = jsonError.detail || errorMessage;
+         } catch (e) { /* fallback to generic error */ }
+      }
+      toast.error(errorMessage, { id: toastId });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   // --- SMART PRE-FILL INJECTOR ---
   const initializeOrderModal = () => {
     let prefillFrom = '';
@@ -590,7 +637,8 @@ export default function OrderHub() {
                   const showReceive = canReceiveOrder && isDispatched && (activeTab === 'primary' || activeTab === 'secondary');
                   const showCancel = canCancelOrder && !isDispatched && (isPending || isApproved);
 
-                  const needsAction = showApprove || showDispatch || showReceive || showCancel || isDispatched;
+                  // Invoice generation is available for all logged orders
+                  const needsAction = showApprove || showDispatch || showReceive || showCancel || isDispatched || true;
 
                   return (
                   <tr key={o.id}>
@@ -674,6 +722,17 @@ export default function OrderHub() {
                                 </button>
                               </li>
                             }
+
+                            {/* --- GENERATE INVOICE OPTION --- */}
+                            <li>
+                              <button className="dropdown-item rounded-3 text-dark fw-bold py-2 mb-1" onClick={() => handleGenerateInvoice(o.id)}>
+                                <div className="bg-dark bg-opacity-10 d-inline-block p-2 rounded-circle me-2">
+                                  <i className="fa-solid fa-file-invoice text-dark"></i>
+                                </div>
+                                Generate Invoice
+                              </button>
+                            </li>
+
                             {showCancel && (
                               <>
                                 <li><hr className="dropdown-divider opacity-10 m-1" /></li>
@@ -968,7 +1027,7 @@ export default function OrderHub() {
         </div>
       )}
 
-      {/* --- MODAL: DISPATCH LOGISTICS DETAILS --- */}
+
       {isDispatchModalOpen && (
         <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(15, 23, 42, 0.7)', backdropFilter: 'blur(5px)', zIndex: 1070 }}>
           <div className="modal-dialog modal-dialog-centered">
