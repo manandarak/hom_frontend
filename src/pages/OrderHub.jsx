@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useContext } from 'react';
 import api from '../api';
 import toast, { Toaster } from 'react-hot-toast';
-import { AuthContext } from '../context/AuthContext';
+import { useAuth } from '../context/AuthContext';
 
 export default function OrderHub() {
-  const { user } = useContext(AuthContext);
+  const { user } = useAuth();
 
   const roleName = typeof user?.role === 'object' ? user?.role?.name : user?.role;
   const userPerms = user?.role?.permissions?.map(p => p.name) || user?.permissions || [];
@@ -642,10 +642,29 @@ export default function OrderHub() {
 
                   return (
                   <tr key={o.id}>
+                    {/* --- UPDATED: Quick-Access PDF Invoice Button --- */}
                     <td className="px-4">
-                      <code className="bg-dark bg-opacity-10 text-dark px-2 py-1 rounded fw-bold border">
-                        {o.order_number || o.invoice_number || `ORD-${o.id}`}
-                      </code>
+                      <div className="d-flex align-items-center gap-2">
+                        <code className="bg-dark bg-opacity-10 text-dark px-2 py-1 rounded fw-bold border mb-0">
+                          {o.order_number || o.invoice_number || `ORD-${o.id}`}
+                        </code>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleGenerateInvoice(o.id);
+                          }}
+                          className="btn btn-sm btn-light border shadow-sm rounded-circle d-flex align-items-center justify-content-center"
+                          style={{ width: '32px', height: '32px' }}
+                          title="Download PDF Invoice"
+                          disabled={isSubmitting}
+                        >
+                          {isSubmitting ? (
+                            <span className="spinner-border spinner-border-sm text-secondary"></span>
+                          ) : (
+                            <i className="fa-solid fa-file-pdf text-danger"></i>
+                          )}
+                        </button>
+                      </div>
                     </td>
                     <td>
                       <div className="d-flex align-items-center bg-light rounded-pill px-2 py-1 d-inline-flex border">
@@ -723,7 +742,7 @@ export default function OrderHub() {
                               </li>
                             }
 
-                            {/* --- GENERATE INVOICE OPTION --- */}
+                            {/* --- GENERATE INVOICE OPTION (Backup in Action Menu) --- */}
                             <li>
                               <button className="dropdown-item rounded-3 text-dark fw-bold py-2 mb-1" onClick={() => handleGenerateInvoice(o.id)}>
                                 <div className="bg-dark bg-opacity-10 d-inline-block p-2 rounded-circle me-2">

@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useContext } from 'react';
 import api from '../api';
 import toast, { Toaster } from 'react-hot-toast';
-import { AuthContext } from '../context/AuthContext';
+import { useAuth } from '../context/AuthContext';
 
 export default function GeographyMaster() {
   const [loading, setLoading] = useState(true);
 
   // --- BULLETPROOF RBAC LOGIC ---
-  const { user } = useContext(AuthContext);
+  const { user } = useAuth();
   const roleName = typeof user?.role === 'object' ? user?.role?.name : user?.role;
   const isAdmin = roleName?.toLowerCase() === 'admin' || (user?.permissions || []).includes('manage_roles');
   const userPerms = user?.permissions || [];

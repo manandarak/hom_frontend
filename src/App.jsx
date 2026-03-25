@@ -1,6 +1,6 @@
 import React, { useContext } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { AuthContext } from './context/AuthContext';
+import { useAuth } from './context/AuthContext';
 import MainLayout from './layouts/MainLayout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
@@ -13,7 +13,7 @@ import FinanceMaster from './pages/FinanceMaster.jsx';
 import OrderHub from "./pages/OrderHub.jsx";
 
 const ProtectedRoute = ({ children, requiredPermissions = [] }) => {
-  const { user, loading } = useContext(AuthContext);
+  const { user, loading } = useAuth();
 
   if (loading) return <div className="d-flex justify-content-center align-items-center vh-100"><div className="spinner-border text-primary"></div></div>;
   if (!user) return <Navigate to="/login" replace />;

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useContext } from 'react';
 import api from '../api';
 import toast, { Toaster } from 'react-hot-toast';
-import { AuthContext } from '../context/AuthContext';
+import { useAuth } from '../context/AuthContext';
 import * as XLSX from 'xlsx';
 
 const initialUserForm = {
@@ -64,7 +64,7 @@ const categorizePermissions = (permissions) => {
 };
 
 export default function UserMatrix() {
-  const { user } = useContext(AuthContext);
+  const { user } = useAuth();
 
   // --- STRICT RBAC EVALUATION ---
   const roleName = typeof user?.role === 'object' ? user?.role?.name : user?.role;

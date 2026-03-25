@@ -2,11 +2,11 @@ import React, { useState, useEffect, useRef, useContext, useCallback } from 'rea
 import Chart from 'react-apexcharts';
 import { MapContainer, TileLayer, CircleMarker, Popup, Tooltip } from 'react-leaflet';
 import api from '../api';
-import { AuthContext } from '../context/AuthContext';
+import { useAuth } from '../context/AuthContext';
 import 'leaflet/dist/leaflet.css';
 
 export default function Dashboard() {
-  const { user } = useContext(AuthContext);
+  const { user } = useAuth();
   const terminalRef = useRef(null);
 
   // --- STRICT RBAC EVALUATION ---

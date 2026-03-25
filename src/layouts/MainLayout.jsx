@@ -1,8 +1,6 @@
 import React, {useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
-import { AuthContext } from '../context/AuthContext';
-
 export default function MainLayout() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
@@ -89,7 +87,7 @@ export default function MainLayout() {
         {/* LOGO AREA */}
         <div className="p-4 mb-2 text-center border-bottom border-light">
           <img
-            src="/src/assets/logo.png"
+            // src="/src/assets/logo.png"
             alt="HOM Pulse Logo"
             style={{ width: '180px', height: 'auto', objectFit: 'contain' }}
             className="mb-2"

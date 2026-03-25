@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useContext } from 'react';
 import api from '../api';
 import toast, { Toaster } from 'react-hot-toast';
-import { AuthContext } from '../context/AuthContext';
+import { useAuth } from '../context/AuthContext';
 
 export default function FinanceMaster() {
-  const { user } = useContext(AuthContext);
+  const { user } = useAuth();
   const [loading, setLoading] = useState(false);
 
   // --- STRICT RBAC EVALUATION ---
