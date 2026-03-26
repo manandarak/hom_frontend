@@ -11,6 +11,7 @@ import InventoryMaster from './pages/InventoryMaster';
 import UserMatrix from './pages/UserMatrix.jsx';
 import FinanceMaster from './pages/FinanceMaster.jsx';
 import OrderHub from "./pages/OrderHub.jsx";
+import FactoryProcess from './pages/FactoryProcess.jsx';
 
 const ProtectedRoute = ({ children, requiredPermissions = [] }) => {
   const { user, loading } = useAuth();
@@ -62,6 +63,14 @@ function App() {
               <PartnerMaster />
             </ProtectedRoute>
           } />
+
+          {/* --- ADD THE NEW PRODUCTION ROUTE HERE --- */}
+          <Route path="production" element={
+            <ProtectedRoute requiredPermissions={['view_production', 'manage_production']}>
+              <FactoryProcess />
+            </ProtectedRoute>
+          } />
+          {/* ----------------------------------------- */}
 
           <Route path="users" element={
             <ProtectedRoute requiredPermissions={['view_users', 'manage_users']}>

@@ -1,6 +1,7 @@
-import React, {useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
+
 export default function MainLayout() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
@@ -66,10 +67,15 @@ export default function MainLayout() {
   // Operations & Execution - Dynamically driven by the Permission Matrix
   const canViewInventory = isAdmin || userPerms.includes("view_inventory");
   const canViewFinance = isAdmin || userPerms.includes("view_invoices") || userPerms.includes("view_ledgers");
+
+  // NEW: Factory Production Permissions
+  const canViewProduction = isAdmin || userPerms.includes("view_production") || userPerms.includes("manage_production");
+
   const canViewOrders = isAdmin || userPerms.includes("view_all_orders") || userPerms.includes("view_own_orders") || userPerms.includes("create_primary_order") || userPerms.includes("create_secondary_order");
 
   const showCoreInfra = canViewGeo || canViewProducts || canViewPartners || canViewUsers;
-  const showOperations = canViewInventory || canViewFinance;
+  // UPDATED: Now includes Factory Production in the Operations grouping
+  const showOperations = canViewInventory || canViewFinance || canViewProduction;
 
   // --- STYLING HELPER ---
   const getNavLinkClass = ({ isActive }) =>
@@ -130,6 +136,11 @@ export default function MainLayout() {
               <li className="nav-item mt-3 mb-1 px-4 text-uppercase text-muted fw-bold" style={{ fontSize: '0.65rem', letterSpacing: '1px' }}>
                 Operations
               </li>
+            )}
+
+            {/* NEW: Factory Floor Navigation Link */}
+            {canViewProduction && (
+              <li className="nav-item"><NavLink to="/production" className={getNavLinkClass}><i className="fa-solid fa-industry me-3 fs-5" style={{ width: '24px' }}></i> Factory Floor</NavLink></li>
             )}
 
             {canViewInventory && (

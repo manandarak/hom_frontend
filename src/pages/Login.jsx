@@ -41,7 +41,7 @@ export default function Login() {
     <div
       className="d-flex align-items-center justify-content-center vh-100"
       style={{
-        // backgroundImage: "url('https://cdn.shopify.com/s/files/1/0749/7557/6242/files/malhotra_hosue_sketch.png?v=1770835017')",
+        backgroundImage: "url('https://cdn.shopify.com/s/files/1/0749/7557/6242/files/malhotra_hosue_sketch.png?v=1770835017')",
         backgroundSize: 'cover',
         backgroundPosition: 'center',
         backgroundRepeat: 'no-repeat',
@@ -60,8 +60,8 @@ export default function Login() {
         <div className="card-body p-5">
           <div className="text-center mb-4">
             <img
-              // src="/src/assets/logo.png"
-              // alt="House of Malhotra Logo"
+              src="/src/assets/logo.png"
+              alt="House of Malhotra Logo"
               style={{ width: '200px', height: '100px', objectFit: 'contain' }}
             />
           </div>

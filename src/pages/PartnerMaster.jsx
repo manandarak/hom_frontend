@@ -11,7 +11,7 @@ const initialFormState = {
   parent_ss_id: '',
   linked_distributor_id: '',
   gstin: '',
-  user_id: '', // Used for linking a System User (Login) to a Business Entity
+  user_id: '',
   is_active: true
 };
 
@@ -20,16 +20,13 @@ export default function PartnerMaster() {
   const [activeTab, setActiveTab] = useState('ss'); // ss, distributors, retailers
   const [loading, setLoading] = useState(true);
 
-  // --- BULLETPROOF RBAC LOGIC ---
   const { user } = useAuth();
   const roleName = typeof user?.role === 'object' ? user?.role?.name : user?.role;
   const isAdmin = roleName?.toLowerCase() === 'admin' || (user?.permissions || []).includes('manage_roles');
   const userPerms = user?.permissions || [];
 
-  // Drives database execution (Can they click the Add/Edit/Delete buttons?)
   const canManagePartners = isAdmin || userPerms.includes('manage_partners');
 
-  // --- CASCADING GEO STATE ---
   const [geoMaster, setGeoMaster] = useState({
     zones: [], states: [], regions: [], areas: [], territories: []
   });
@@ -37,35 +34,29 @@ export default function PartnerMaster() {
     zone_id: '', state_id: '', region_id: '', area_id: '', territory_id: ''
   });
 
-  // --- SYSTEM USERS STATE ---
   const [systemUsers, setSystemUsers] = useState([]);
 
-  // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [formData, setFormData] = useState(initialFormState);
 
-  // Helper to map tab state to exact API endpoint strings
   const getEndpoint = () => {
     if (activeTab === 'ss') return 'super-stockists';
     if (activeTab === 'distributors') return 'distributors';
     return 'retailers';
   };
 
-  // NORMALIZERS
   const getPartnerName = (p) => p.name || p.firm_name || p.shop_name || "Unknown Entity";
   const getContactPerson = (p) => p.contact_person || "Not Provided";
   const getPhone = (p) => p.phone || p.contact_number || "";
 
-  // Helper for Table Display
   const getRegionDisplay = (p) => {
      if (activeTab === 'ss') return p.zone_id ? `Zone ID: ${p.zone_id}` : 'Unassigned';
      if (activeTab === 'distributors') return p.state_id ? `State ID: ${p.state_id}` : 'Unassigned';
      return p.territory_id ? `Territory ID: ${p.territory_id}` : 'Unassigned';
   };
 
-  // --- INITIAL DATA FETCH ---
   useEffect(() => {
     const fetchInitialData = async () => {
       setLoading(true);
@@ -117,7 +108,7 @@ export default function PartnerMaster() {
     } catch (err) { console.error(err); }
   };
 
-  // --- CASCADING GEO HANDLER ---
+
   const handleGeoChange = async (field, value) => {
     setGeoFilter(prev => ({ ...prev, [field]: value }));
 
@@ -176,7 +167,6 @@ export default function PartnerMaster() {
       is_active: partner.is_active !== undefined ? partner.is_active : true
     });
 
-    // Clear the deep lists so user is forced to rebuild hierarchy cleanly if changing
     setGeoMaster(prev => ({ ...prev, states: [], regions: [], areas: [], territories: [] }));
     setGeoFilter({
       zone_id: activeTab === 'ss' ? (partner.zone_id || '') : '',
@@ -192,12 +182,11 @@ export default function PartnerMaster() {
   const buildPayload = () => {
     const payload = { ...formData };
 
-    // Convert user_id to Int if present, otherwise null
     payload.user_id = payload.user_id ? parseInt(payload.user_id) : null;
 
     if (activeTab === 'ss') {
       payload.firm_name = payload.name;
-      payload.zone_id = parseInt(geoFilter.zone_id); // Pick from GeoFilter directly
+      payload.zone_id = parseInt(geoFilter.zone_id);
       payload.contact_number = payload.phone;
       delete payload.name;
       delete payload.phone;
@@ -206,7 +195,7 @@ export default function PartnerMaster() {
 
     } else if (activeTab === 'distributors') {
       payload.firm_name = payload.name;
-      payload.state_id = parseInt(geoFilter.state_id); // Pick from GeoFilter directly
+      payload.state_id = parseInt(geoFilter.state_id);
       payload.contact_number = payload.phone;
       payload.parent_ss_id = payload.parent_ss_id ? parseInt(payload.parent_ss_id) : null;
       payload.is_direct_party = !payload.parent_ss_id;
@@ -216,7 +205,7 @@ export default function PartnerMaster() {
 
     } else if (activeTab === 'retailers') {
       payload.shop_name = payload.name;
-      payload.territory_id = parseInt(geoFilter.territory_id); // Pick from GeoFilter directly
+      payload.territory_id = parseInt(geoFilter.territory_id);
       payload.contact_number = payload.phone;
       payload.linked_distributor_id = payload.linked_distributor_id ? parseInt(payload.linked_distributor_id) : null;
       delete payload.name;
@@ -284,7 +273,6 @@ export default function PartnerMaster() {
            (p.gstin && p.gstin.toLowerCase().includes(searchQuery.toLowerCase()));
   });
 
-  // Helper to find username based on user_id for the table display
   const getUsername = (userId) => {
     if (!userId) return "None";
     const mappedUser = systemUsers.find(u => u.id === userId);
@@ -295,8 +283,6 @@ export default function PartnerMaster() {
   return (
     <div className="container-fluid p-4" style={{ backgroundColor: '#f8f9fa', minHeight: '100vh' }}>
       <Toaster position="top-right" toastOptions={{ style: { borderRadius: '10px', background: '#333', color: '#fff' } }} />
-
-      {/* HEADER */}
       <div className="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-4 gap-3">
         <div>
           <h3 className="fw-bolder m-0 text-dark" style={{ letterSpacing: '-0.5px' }}>
@@ -305,7 +291,6 @@ export default function PartnerMaster() {
           <p className="text-muted m-0 mt-1">Manage and provision your supply chain network nodes.</p>
         </div>
 
-        {/* ADD BUTTON SECURED BY PERMISSIONS */}
         {canManagePartners && (
           <button className="btn btn-primary btn-lg shadow-sm rounded-pill px-4 fw-semibold" onClick={() => setIsModalOpen(true)}>
             <i className="fa-solid fa-plus me-2"></i> Add {activeTab === 'ss' ? 'Super Stockist' : activeTab.slice(0, -1)}
