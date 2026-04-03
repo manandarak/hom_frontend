@@ -6,7 +6,6 @@ import { useAuth } from '../context/AuthContext';
 export default function InventoryMaster() {
   const { user } = useAuth();
 
-  // --- BULLETPROOF RBAC LOGIC ---
   const roleName = typeof user?.role === 'object' ? user?.role?.name : user?.role;
   const userPerms = user?.permissions || [];
 
@@ -20,13 +19,10 @@ export default function InventoryMaster() {
   const [activeTab, setActiveTab] = useState(defaultTab);
   const [loading, setLoading] = useState(false);
 
-  // --- HYDRATED MASTER DATA ---
   const [masterData, setMasterData] = useState({
     products: [], ss: [], distributors: [], retailers: [], factories: []
   });
 
-  // --- CORE DATA STATES ---
-  // Factory is now split into the 3 true manufacturing buckets
   const [factoryFgStock, setFactoryFgStock] = useState([]);
   const [factoryWipStock, setFactoryWipStock] = useState([]);
   const [factoryScrapStock, setFactoryScrapStock] = useState([]);
@@ -38,7 +34,6 @@ export default function InventoryMaster() {
   const [selectedFactoryId, setSelectedFactoryId] = useState('');
   const [selectedSsId, setSelectedSsId] = useState('');
 
-  // --- MODAL STATES ---
   const [isOpeningStockModalOpen, setIsOpeningStockModalOpen] = useState(false);
   const [isAdjustModalOpen, setIsAdjustModalOpen] = useState(false);
   const [isAddFactoryModalOpen, setIsAddFactoryModalOpen] = useState(false);
@@ -50,7 +45,6 @@ export default function InventoryMaster() {
   const [adjustForm, setAdjustForm] = useState({ entity_type: 'factory', entity_id: '', product_id: '', quantity: '', reason: '' });
   const [newFactoryName, setNewFactoryName] = useState('');
 
-  // --- 1. HYDRATION ON MOUNT ---
   useEffect(() => {
     const fetchMasterData = async () => {
       try {
@@ -93,7 +87,6 @@ export default function InventoryMaster() {
     fetchMasterData();
   }, [isInternalTeam, roleName]);
 
-  // --- TRANSLATORS ---
   const getProductName = (id) => {
     const p = masterData.products.find(x => x.id === parseInt(id));
     return p ? p.name || p.product_name : `PRD-${id}`;
@@ -101,7 +94,6 @@ export default function InventoryMaster() {
 
   const getProductSku = (id) => {
     const p = masterData.products.find(x => x.id === parseInt(id));
-    // FIXED: Safely fallback between sku and sku_code to prevent crashes
     return p ? (p.sku_code || p.sku || `SKU-${id}`) : `SKU-${id}`;
   };
 
@@ -130,13 +122,11 @@ export default function InventoryMaster() {
     return { text: `🔄 ${t || 'UNKNOWN'}`, badge: 'bg-light text-dark border' };
   };
 
-  // --- DATA FETCHERS ---
   const fetchFactoryStock = async (id) => {
     if (!id) return;
     setLoading(true);
     setSelectedFactoryId(id);
     try {
-      // 🚨 NEW: Fetch all 3 buckets to give a true representation of the factory floor
       const [fgRes, wipRes, scrapRes] = await Promise.all([
         api.get(`/inventory/factory/${id}`).catch(() => ({ data: [] })),
         api.get(`/production/wip/factory/${id}`).catch(() => ({ data: [] })),

@@ -64,20 +64,17 @@ export default function MainLayout() {
   const canViewPartners = isAdmin || userPerms.includes("view_partners");
   const canViewUsers = isAdmin || userPerms.includes("view_users") || userPerms.includes("manage_users");
 
-  // Operations & Execution - Dynamically driven by the Permission Matrix
   const canViewInventory = isAdmin || userPerms.includes("view_inventory");
   const canViewFinance = isAdmin || userPerms.includes("view_invoices") || userPerms.includes("view_ledgers");
 
-  // NEW: Factory Production Permissions
+
   const canViewProduction = isAdmin || userPerms.includes("view_production") || userPerms.includes("manage_production");
 
   const canViewOrders = isAdmin || userPerms.includes("view_all_orders") || userPerms.includes("view_own_orders") || userPerms.includes("create_primary_order") || userPerms.includes("create_secondary_order");
 
   const showCoreInfra = canViewGeo || canViewProducts || canViewPartners || canViewUsers;
-  // UPDATED: Now includes Factory Production in the Operations grouping
   const showOperations = canViewInventory || canViewFinance || canViewProduction;
 
-  // --- STYLING HELPER ---
   const getNavLinkClass = ({ isActive }) =>
     `nav-link px-4 py-3 mb-1 fw-semibold d-flex align-items-center rounded-end-pill me-3 transition-all ` +
     (isActive
