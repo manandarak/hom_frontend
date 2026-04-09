@@ -12,6 +12,7 @@ import UserMatrix from './pages/UserMatrix.jsx';
 import FinanceMaster from './pages/FinanceMaster.jsx';
 import OrderHub from "./pages/OrderHub.jsx";
 import FactoryProcess from './pages/FactoryProcess.jsx';
+import ConversionManager from "./pages/ConversionManager.jsx";
 
 const ProtectedRoute = ({ children, requiredPermissions = [] }) => {
   const { user, loading } = useAuth();
@@ -91,6 +92,12 @@ function App() {
           <Route path="orders" element={
             <ProtectedRoute requiredPermissions={['view_all_orders', 'view_own_orders', 'create_primary_order', 'create_secondary_order']}>
               <OrderHub />
+            </ProtectedRoute>
+          } />
+
+          <Route path="conversion-rules" element={
+            <ProtectedRoute requiredPermissions={['view_production', 'manage_production']}>
+              <ConversionManager />
             </ProtectedRoute>
           } />
 

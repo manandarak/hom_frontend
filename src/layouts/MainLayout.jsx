@@ -67,7 +67,6 @@ export default function MainLayout() {
   const canViewInventory = isAdmin || userPerms.includes("view_inventory");
   const canViewFinance = isAdmin || userPerms.includes("view_invoices") || userPerms.includes("view_ledgers");
 
-
   const canViewProduction = isAdmin || userPerms.includes("view_production") || userPerms.includes("manage_production");
 
   const canViewOrders = isAdmin || userPerms.includes("view_all_orders") || userPerms.includes("view_own_orders") || userPerms.includes("create_primary_order") || userPerms.includes("create_secondary_order");
@@ -135,9 +134,21 @@ export default function MainLayout() {
               </li>
             )}
 
-            {/* NEW: Factory Floor Navigation Link */}
+            {/* UPSTREAM MANUFACTURING AREA */}
             {canViewProduction && (
-              <li className="nav-item"><NavLink to="/production" className={getNavLinkClass}><i className="fa-solid fa-industry me-3 fs-5" style={{ width: '24px' }}></i> Factory Floor</NavLink></li>
+              <>
+                <li className="nav-item">
+                  <NavLink to="/production" className={getNavLinkClass}>
+                    <i className="fa-solid fa-industry me-3 fs-5" style={{ width: '24px' }}></i> Factory Floor
+                  </NavLink>
+                </li>
+                {/* NEW: Conversion / BOM Rules Link */}
+                <li className="nav-item">
+                  <NavLink to="/conversion-rules" className={getNavLinkClass}>
+                    <i className="fa-solid fa-code-branch me-3 fs-5" style={{ width: '24px' }}></i> Conversion Rules
+                  </NavLink>
+                </li>
+              </>
             )}
 
             {canViewInventory && (
